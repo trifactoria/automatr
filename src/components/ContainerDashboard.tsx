@@ -53,9 +53,9 @@ export function ContainerDashboard({
   onDeleteAutomation: () => void;
 }) {
   return (
-    <div className="grid gap-4">
+    <div className="auto-container grid gap-4">
       {/* VNC card */}
-      <div className="rounded-2xl border p-4">
+      <div className="auto-card rounded-2xl border p-4">
         <div className="flex items-center justify-between">
           <div className="text-lg font-semibold">Container: {containerName}</div>
           <div className="flex gap-4">
@@ -69,7 +69,7 @@ export function ContainerDashboard({
             <div className="flex items-center justify-between border-b bg-gray-50 p-2">
               <div className="text-sm text-gray-600">VNC</div>
               <div className="flex items-center gap-2">
-                <button className="rounded-lg border px-3 py-1" onClick={onStopAuto}>
+                <button className="auto-btn auto-btn--danger rounded-lg border px-3 py-1" onClick={onStopAuto}>
                   Stop Auto
                 </button>
                 <Toggle label="Takeover" checked={takeover} onChange={setTakeover} />
@@ -94,12 +94,12 @@ export function ContainerDashboard({
       </div>
 
       {/* Automation row */}
-      <div className="rounded-2xl border p-4">
+      <div className="auto-card rounded-2xl border p-4">
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-gray-600">Automation</span>
+          <label className="auto-select flex flex-col gap-1">
+            <span className="auto-select__label text-sm text-gray-600">Automation</span>
             <select
-              className="rounded-lg border p-2"
+              className="auto-select__control rounded-lg border p-2"
               value={automationName}
               onChange={(e) => setAutomationName(e.target.value)}
             >
@@ -112,13 +112,13 @@ export function ContainerDashboard({
             </select>
           </label>
 
-          <button className="rounded-lg border px-3 py-2" onClick={onNewAutomation}>
+          <button className="auto-btn rounded-lg border px-3 py-2" onClick={onNewAutomation}>
             New
           </button>
-          <button className="rounded-lg border px-3 py-2" onClick={onSaveAutomation} disabled={!automationName}>
+          <button className="auto-btn rounded-lg border px-3 py-2" onClick={onSaveAutomation} disabled={!automationName}>
             Save
           </button>
-          <button className="rounded-lg border px-3 py-2" onClick={onDeleteAutomation} disabled={!automationName}>
+          <button className="auto-btn auto-btn--danger rounded-lg border px-3 py-2" onClick={onDeleteAutomation} disabled={!automationName}>
             Delete
           </button>
 

@@ -168,18 +168,18 @@ export default function Page() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
+    <main className="auto-page mx-auto max-w-6xl p-6">
       {/* Header */}
-      <div className="mb-4 flex items-center gap-3">
-        <div className="h-8 w-8 rounded-xl border" />
-        <div className="text-2xl font-bold">Automatr</div>
-        <div className="ml-auto text-sm text-gray-500">
+      <div className="auto-header mb-4 flex items-center gap-3">
+        <div className="auto-logo h-8 w-8 rounded-xl border" />
+        <div className="auto-title text-2xl font-bold">Automatr</div>
+        <div className="auto-subtitle ml-auto text-sm text-gray-500">
           {context.kind === "host" ? "Host Dashboard" : `Container Dashboard: ${context.name}`}
         </div>
       </div>
 
       {/* Top bar: context selector */}
-      <div className="mb-4 flex flex-wrap items-end gap-3 rounded-2xl border p-4">
+      <div className="auto-card auto-row mb-4 flex flex-wrap items-end gap-3 rounded-2xl border p-4">
         <div className="w-72">
           <Select
             label="Container"
@@ -189,13 +189,13 @@ export default function Page() {
           />
         </div>
 
-        <button className="rounded-lg border px-3 py-2" onClick={() => setCreateContainerOpen(true)}>
+        <button className="auto-btn auto-btn--primary rounded-lg border px-3 py-2" onClick={() => setCreateContainerOpen(true)}>
           New
         </button>
 
-        <div className="ml-auto rounded-xl bg-gray-50 p-3 text-sm">
-          <div className="font-semibold">Diagnostics</div>
-          <div className="text-gray-700 whitespace-pre-wrap break-words">{diag || "—"}</div>
+        <div className="auto-diag ml-auto rounded-xl bg-gray-50 p-3 text-sm">
+          <div className="auto-diag__title font-semibold">Diagnostics</div>
+          <div className="auto-diag__body text-gray-700 whitespace-pre-wrap break-words">{diag || "—"}</div>
         </div>
       </div>
 

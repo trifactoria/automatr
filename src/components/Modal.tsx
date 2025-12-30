@@ -13,15 +13,15 @@ export function Modal({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b p-4">
-          <div className="text-lg font-semibold">{title}</div>
-          <button className="rounded-lg border px-3 py-1" onClick={onClose}>
+    <div className="auto-modal__overlay fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="auto-modal w-full max-w-2xl rounded-2xl bg-white shadow-xl">
+        <div className="auto-modal__header flex items-center justify-between border-b p-4">
+          <div className="auto-modal__title text-lg font-semibold">{title}</div>
+          <button className="auto-btn rounded-lg border px-3 py-1" onClick={onClose}>
             Close
           </button>
         </div>
-        <div className="p-4">{children}</div>
+        <div className="auto-modal__body p-4">{children}</div>
       </div>
     </div>
   );
