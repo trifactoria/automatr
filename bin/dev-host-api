@@ -2,7 +2,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-export $(grep -v '^#' .env.example | xargs) >/dev/null 2>&1 || true
 
 # prefer real .env if you create it
 if [[ -f .env ]]; then
