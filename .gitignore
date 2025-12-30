@@ -1,0 +1,23 @@
+# node
+src/node_modules/
+src/.next/
+src/out/
+src/.turbo/
+src/.env.local
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# automatr data
+data/automatr.db
+data/*/run.lock
+data/*/*/run.log
+data/*/*/events.jsonl
+data/*/*/meta.json
+data/*/*/published.yaml
+data/*/*/screenshots/
+data/*/*/artifacts/
+

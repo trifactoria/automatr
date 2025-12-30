@@ -1,0 +1,146 @@
+"use client";
+
+import { Toggle } from "@/components/Toggle";
+import type { AutomationRow, VncInfo } from "@/lib/types";
+
+export function ContainerDashboard({
+  containerName,
+  vncVisible,
+  setVncVisible,
+  running,
+  setRunning,
+  vnc,
+  takeover,
+  setTakeover,
+  automationName,
+  setAutomationName,
+  automations,
+  editorVisible,
+  setEditorVisible,
+  loggerVisible,
+  setLoggerVisible,
+  onStopAuto,
+  onNewAutomation,
+  onSaveAutomation,
+  onDeleteAutomation,
+}: {
+  containerName: string;
+
+  vncVisible: boolean;
+  setVncVisible: (v: boolean) => void;
+
+  running: boolean;
+  setRunning: (v: boolean) => void;
+
+  vnc: VncInfo | null;
+
+  takeover: boolean;
+  setTakeover: (v: boolean) => void;
+
+  automations: AutomationRow[];
+  automationName: string;
+  setAutomationName: (v: string) => void;
+
+  editorVisible: boolean;
+  setEditorVisible: (v: boolean) => void;
+
+  loggerVisible: boolean;
+  setLoggerVisible: (v: boolean) => void;
+
+  onStopAuto: () => Promise<void>;
+  onNewAutomation: () => void;
+  onSaveAutomation: () => void;
+  onDeleteAutomation: () => void;
+}) {
+  return (
+    <div className="grid gap-4">
+      {/* VNC card */}
+      <div className="rounded-2xl border p-4">
+        <div className="flex items-center justify-between">
+          <div className="text-lg font-semibold">Container: {containerName}</div>
+          <div className="flex gap-4">
+            <Toggle label="VNC" checked={vncVisible} onChange={setVncVisible} />
+            <Toggle label="Running" checked={running} onChange={setRunning} />
+          </div>
+        </div>
+
+        {vncVisible ? (
+          <div className="mt-3 rounded-xl border overflow-hidden">
+            <div className="flex items-center justify-between border-b bg-gray-50 p-2">
+              <div className="text-sm text-gray-600">VNC</div>
+              <div className="flex items-center gap-2">
+                <button className="rounded-lg border px-3 py-1" onClick={onStopAuto}>
+                  Stop Auto
+                </button>
+                <Toggle label="Takeover" checked={takeover} onChange={setTakeover} />
+              </div>
+            </div>
+            <div className="h-[420px] bg-black">
+              {vnc?.url ? (
+                <iframe
+                  src={vnc.url}
+                  className="h-full w-full"
+                  // view-only is typically handled by the vnc URL or novnc settings;
+                  // takeover toggle can later switch url params.
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-white/70">
+                  No VNC URL yet
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Automation row */}
+      <div className="rounded-2xl border p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-gray-600">Automation</span>
+            <select
+              className="rounded-lg border p-2"
+              value={automationName}
+              onChange={(e) => setAutomationName(e.target.value)}
+            >
+              <option value="">—</option>
+              {automations.map((a) => (
+                <option key={a.name} value={a.name}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button className="rounded-lg border px-3 py-2" onClick={onNewAutomation}>
+            New
+          </button>
+          <button className="rounded-lg border px-3 py-2" onClick={onSaveAutomation} disabled={!automationName}>
+            Save
+          </button>
+          <button className="rounded-lg border px-3 py-2" onClick={onDeleteAutomation} disabled={!automationName}>
+            Delete
+          </button>
+
+          <div className="ml-auto flex gap-4">
+            <Toggle label="Editor" checked={editorVisible} onChange={setEditorVisible} />
+            <Toggle label="Show Logger" checked={loggerVisible} onChange={setLoggerVisible} />
+          </div>
+        </div>
+
+        {editorVisible ? (
+          <div className="mt-4 rounded-xl border p-3 text-sm text-gray-500">
+            Editor panel placeholder (table rows go here).
+          </div>
+        ) : null}
+
+        {loggerVisible ? (
+          <div className="mt-4 rounded-xl border p-3 text-sm text-gray-500">
+            Logger placeholder (tail logs here).
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
