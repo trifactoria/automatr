@@ -14,10 +14,10 @@ export function Select<T extends string>({
   disabled?: boolean;
 }) {
   return (
-    <label className={`flex flex-col gap-1 ${disabled ? "opacity-50" : ""}`}>
-      <span className="text-sm text-gray-600">{label}</span>
+    <label className={`auto-select flex flex-col gap-1 ${disabled ? "opacity-50" : ""}`}>
+      <span className="auto-select__label text-sm text-gray-600">{label}</span>
       <select
-        className="rounded-lg border p-2"
+        className="auto-select__control rounded-lg border p-2"
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value as T)}
