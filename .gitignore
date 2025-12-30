@@ -20,4 +20,9 @@ data/*/*/meta.json
 data/*/*/published.yaml
 data/*/*/screenshots/
 data/*/*/artifacts/
+data/**
+!data/.gitkeep
+*.db-wal
+*.db-shm
+*.db-journal
 
