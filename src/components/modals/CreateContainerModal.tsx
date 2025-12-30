@@ -18,19 +18,19 @@ export function CreateContainerModal({
   return (
     <Modal open={open} title="Create Container" onClose={onClose}>
       <div className="grid gap-3">
-        <label className="grid gap-1">
-          <span className="text-sm text-gray-600">Name (slug)</span>
+        <label className="auto-modal__field grid gap-1">
+          <span className="auto-modal__field-label text-sm text-gray-600">Name (slug)</span>
           <input
-            className="rounded-lg border p-2"
+            className="auto-input rounded-lg border p-2"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="rh-watch"
           />
         </label>
-        <label className="grid gap-1">
-          <span className="text-sm text-gray-600">Description</span>
+        <label className="auto-modal__field grid gap-1">
+          <span className="auto-modal__field-label text-sm text-gray-600">Description</span>
           <input
-            className="rounded-lg border p-2"
+            className="auto-input rounded-lg border p-2"
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
             placeholder="Watches price and reacts"
@@ -39,7 +39,7 @@ export function CreateContainerModal({
 
         <div className="flex gap-2">
           <button
-            className="rounded-lg border px-3 py-2"
+            className="auto-btn auto-btn--primary rounded-lg border px-3 py-2"
             onClick={async () => {
               await onCreate({ name: name.trim(), description: desc.trim() });
               setName("");
@@ -49,7 +49,7 @@ export function CreateContainerModal({
           >
             Create
           </button>
-          <button className="rounded-lg border px-3 py-2" onClick={onClose}>
+          <button className="auto-btn rounded-lg border px-3 py-2" onClick={onClose}>
             Cancel
           </button>
         </div>
