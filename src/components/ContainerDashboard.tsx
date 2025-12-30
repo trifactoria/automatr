@@ -20,6 +20,7 @@ export function ContainerDashboard({
   loggerVisible,
   setLoggerVisible,
   onStopAuto,
+  onRunAutomation,
   onNewAutomation,
   onSaveAutomation,
   onDeleteAutomation,
@@ -48,6 +49,7 @@ export function ContainerDashboard({
   setLoggerVisible: (v: boolean) => void;
 
   onStopAuto: () => Promise<void>;
+  onRunAutomation: () => Promise<void>;
   onNewAutomation: () => void;
   onSaveAutomation: () => void;
   onDeleteAutomation: () => void;
@@ -112,6 +114,9 @@ export function ContainerDashboard({
             </select>
           </label>
 
+          <button className="auto-btn auto-btn--primary rounded-lg border px-3 py-2" onClick={onRunAutomation} disabled={!automationName || !running}>
+            Run
+          </button>
           <button className="auto-btn rounded-lg border px-3 py-2" onClick={onNewAutomation}>
             New
           </button>
