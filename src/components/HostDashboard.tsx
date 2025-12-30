@@ -14,14 +14,14 @@ export function HostDashboard({
   onViewVnc: (name: string) => Promise<void>;
 }) {
   return (
-    <div className="rounded-2xl border p-4">
+    <div className="auto-host auto-card rounded-2xl border p-4">
       <div className="mb-3 text-lg font-semibold">Host</div>
       <div className="text-sm text-gray-600 mb-3">
         Containers overview (schedules later).
       </div>
 
-      <div className="overflow-auto rounded-xl border">
-        <table className="w-full text-sm">
+      <div className="auto-table-wrap overflow-auto rounded-xl border">
+        <table className="auto-table w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
               <th className="p-2 text-left">Name</th>
@@ -39,15 +39,15 @@ export function HostDashboard({
                   {c.busy ? `yes${c.busy_automation ? ` (${c.busy_automation})` : ""}` : "no"}
                 </td>
                 <td className="p-2 flex gap-2">
-                  <button className="rounded-lg border px-2 py-1" onClick={() => onViewVnc(c.name)}>
+                  <button className="auto-btn rounded-lg border px-2 py-1" onClick={() => onViewVnc(c.name)}>
                     View
                   </button>
                   {c.running ? (
-                    <button className="rounded-lg border px-2 py-1" onClick={() => onStop(c.name)}>
+                    <button className="auto-btn rounded-lg border px-2 py-1" onClick={() => onStop(c.name)}>
                       Stop
                     </button>
                   ) : (
-                    <button className="rounded-lg border px-2 py-1" onClick={() => onStart(c.name)}>
+                    <button className="auto-btn rounded-lg border px-2 py-1" onClick={() => onStart(c.name)}>
                       Start
                     </button>
                   )}
