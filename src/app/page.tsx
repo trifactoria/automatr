@@ -102,6 +102,24 @@ export default function Page() {
     await refresh();
   }
 
+  async function runAutomation() {
+    if (context.kind !== "container") return;
+    if (!automationName) {
+      setDiag("No automation selected");
+      return;
+    }
+
+    try {
+      await apiPost(`/containers/${encodeURIComponent(context.name)}/run`, {
+        automation_name: automationName,
+      });
+      setDiag(`Queued automation: ${automationName}`);
+      await refresh();
+    } catch (e: any) {
+      setDiag(String(e));
+    }
+  }
+
   // Toggle behavior (container dashboard)
   useEffect(() => {
     if (context.kind !== "container") return;
@@ -227,6 +245,7 @@ export default function Page() {
           loggerVisible={loggerVisible}
           setLoggerVisible={setLoggerVisible}
           onStopAuto={stopAuto}
+          onRunAutomation={runAutomation}
           onNewAutomation={() => setCreateAutomationOpen(true)}
           onSaveAutomation={saveAutomation}
           onDeleteAutomation={deleteAutomation}
