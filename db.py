@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
-DEFAULT_DB_PATH = os.getenv("AUTOMATR_DB_PATH", "/home/andy/projects/automatr/data/automatr.db")
+DEFAULT_DB_PATH = os.getenv("AUTOMATR_DB_PATH", "./data/automatr.db")
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
