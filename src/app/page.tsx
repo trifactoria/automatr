@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import type { Context, ContainerRow, AutomationRow, VncInfo } from "@/lib/types";
@@ -171,7 +172,13 @@ export default function Page() {
     <main className="auto-page mx-auto max-w-6xl p-6">
       {/* Header */}
       <div className="auto-header mb-4 flex items-center gap-3">
-        <div className="auto-logo h-8 w-8 rounded-xl border" />
+        <Image
+          src="/logo.png"
+          alt="Automatr logo"
+          width={32}
+          height={32}
+          className="auto-logo rounded-xl border"
+        />
         <div className="auto-title text-2xl font-bold">Automatr</div>
         <div className="auto-subtitle ml-auto text-sm text-gray-500">
           {context.kind === "host" ? "Host Dashboard" : `Container Dashboard: ${context.name}`}
