@@ -1,54 +1,57 @@
 FROM debian:bookworm-slim
 
-# Install all required packages
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y \
-    # X server and window manager
     xvfb \
     openbox \
-    # VNC servers
     x11vnc \
-    # noVNC and websockify
-    novnc \
-    websockify \
-    # Automation tools
     xdotool \
     scrot \
-    # Browser
     firefox-esr \
-    # Python and dependencies
     python3 \
-    python3-yaml \
+    python3-venv \
     python3-pip \
-    # Utilities
     procps \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    dbus-x11 \
+    xauth \
+    fonts-dejavu-core \
+    fonts-liberation \
+  && rm -rf /var/lib/apt/lists/*
 
-# Create automation user
+# --- Python venv (avoids PEP 668) ---
+ENV VENV_PATH=/opt/venv
+RUN python3 -m venv ${VENV_PATH} && \
+    ${VENV_PATH}/bin/pip install --no-cache-dir --upgrade pip && \
+    ${VENV_PATH}/bin/pip install --no-cache-dir pyyaml websockify
+
+# --- noVNC web assets (vendored) ---
+ARG NOVNC_VERSION=v1.5.0
+RUN mkdir -p /opt/novnc && \
+    curl -fsSL -o /tmp/novnc.tgz "https://github.com/novnc/noVNC/archive/refs/tags/${NOVNC_VERSION}.tar.gz" && \
+    tar -xzf /tmp/novnc.tgz -C /opt/novnc --strip-components=1 && \
+    rm -f /tmp/novnc.tgz
+
 RUN useradd -m -s /bin/bash automatr && \
     mkdir -p /automatr/queue && \
     chown -R automatr:automatr /automatr
 
-# Copy runner script
-COPY runner.py /usr/local/bin/runner.py
-RUN chmod +x /usr/local/bin/runner.py
-
-# Copy entrypoint script
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Environment defaults (overridden via docker run -e)
+ENV HOME=/home/automatr
 ENV AUTOMATR_CONTAINER_ROOT=/automatr
 ENV AUTOMATR_QUEUE_DIR=/automatr/queue
 ENV AUTOMATR_SCREEN_W=1366
 ENV AUTOMATR_SCREEN_H=768
 ENV AUTOMATR_SCREEN_D=24
 ENV DISPLAY=:99
+ENV AUTOMATR_NOVNC_WEB=/opt/novnc
 
-# Expose noVNC port
-EXPOSE 6080
+EXPOSE 6080 5900
 
-USER automatr
-WORKDIR /home/automatr
+COPY runner.py /usr/local/bin/runner.py
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/runner.py /usr/local/bin/entrypoint.sh
 
+USER root
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
