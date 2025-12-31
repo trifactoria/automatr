@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+# Input event recorder for Automatr
+# Uses xev for button detection, xdotool for coordinates
+
+import os
+import sys
+import subprocess
+import json
+from datetime import datetime
+from pathlib import Path
+
+DISPLAY = os.getenv("DISPLAY", ":99")
+OUTPUT_FILE = Path(os.getenv("AUTOMATR_CONTAINER_ROOT", "/automatr")) / "input_events.jsonl"
+
+# Ensure output file exists
+OUTPUT_FILE.touch(exist_ok=True)
+
+def get_mouse_coords():
+    """Get current mouse position using xdotool"""
+    try:
+        result = subprocess.run(
+            ["xdotool", "getmouselocation", "--shell"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            env={"DISPLAY": DISPLAY}
+        )
+        if result.returncode == 0:
+            x, y = 0, 0
+            for line in result.stdout.split("\n"):
+                if line.startswith("X="):
+                    x = int(line.split("=")[1])
+                elif line.startswith("Y="):
+                    y = int(line.split("=")[1])
+            return x, y
+    except:
+        pass
+    return 0, 0
+
+def write_event(button, action):
+    """Write click event to JSONL"""
+    x, y = get_mouse_coords()
+    event = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "type": "input_click",
+        "data": {
+            "x": x,
+            "y": y,
+            "button": button,
+            "action": action
+        }
+    }
+    with open(OUTPUT_FILE, "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+# Run xev and parse button events
+proc = subprocess.Popen(
+    ["xev", "-root", "-event", "button"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+    bufsize=1,
+    env={"DISPLAY": DISPLAY}
+)
+
+button_num = 1
+for line in proc.stdout:
+    line = line.strip()
+
+    # Detect button press/release
+    if "ButtonPress" in line or "ButtonRelease" in line:
+        action = "press" if "ButtonPress" in line else "release"
+
+        # Extract button number from detail field
+        # xev outputs like: "detail: 1" on the next line or same line
+        if "detail:" in line:
+            try:
+                button_num = int(line.split("detail:")[1].strip().split()[0])
+            except:
+                button_num = 1
+
+        write_event(button_num, action)
