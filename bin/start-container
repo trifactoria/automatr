@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+SEQ_GID="$(stat -c %g /dev/snd/seq)"
+docker run --rm -it   --network host   --device /dev/snd/seq   --group-add "$SEQ_GID"   -e AUTOMATR_NODE=img1   -v "$PWD/data/containers/img1:/automatr"   automatr-runtime:dev bash
