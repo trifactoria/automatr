@@ -83,7 +83,7 @@ log "Starting Firefox (kiosk)..."
 (
   # Ensure HOME is set for profile stability
   export HOME="${HOME:-/home/automatr}"
-  firefox-esr --kiosk about:blank
+  firefox-esr
 ) || log "WARN: firefox-esr exited immediately" &
 FIREFOX_PID=$!
 
