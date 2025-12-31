@@ -53,5 +53,5 @@ COPY runner.py /usr/local/bin/runner.py
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/runner.py /usr/local/bin/entrypoint.sh
 
-USER root
+USER automatr 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
