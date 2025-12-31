@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+IGNORE_LIST=(
+'*/node_modules/*'
+'.git/*'
+'src/public/*'
+'src/app/favicon*'
+'*pycache*'
+'*.zip'
+)
+
+ZIP_FILE="automatr.zip"
+SOURCE_DIR="."
+
+echo "Zipping $SOURCE_DIR ..."
+zip -r "$ZIP_FILE" "$SOURCE_DIR" -x "${IGNORE_LIST[@]}"
+
+echo "Created $ZIP_FILE"

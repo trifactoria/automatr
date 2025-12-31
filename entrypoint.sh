@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# entrypoint.sh (updated: no venv; uses system websockify + python3)
 set -euo pipefail
 
 : "${AUTOMATR_SCREEN_W:=1366}"
@@ -7,9 +8,27 @@ set -euo pipefail
 : "${DISPLAY:=:99}"
 : "${AUTOMATR_QUEUE_DIR:=/automatr/queue}"
 : "${AUTOMATR_NOVNC_WEB:=/opt/novnc}"
-: "${VENV_PATH:=/opt/venv}"
+
+# RTP-MIDI control socket (host can poke this if needed)
+: "${AUTOMATR_RTPMIDI_SOCK:=/run/rtpmidid/control.sock}"
 
 log() { echo "[entrypoint] $*"; }
+
+# If running as root, ensure runtime dirs and fix /automatr perms on bind mount
+if [[ "$(id -u)" -eq 0 ]]; then
+  mkdir -p /run/dbus /run/avahi-daemon /var/run/rtpmidid
+  chown -R automatr:automatr /automatr || true
+
+  install -d -m 775 -o automatr -g automatr /run/rtpmidid
+  ln -snf /run/rtpmidid /var/run/rtpmidid
+
+  # start dbus + avahi
+  dbus-daemon --system --fork
+  avahi-daemon --daemonize --no-drop-root || true
+
+  # now re-exec entrypoint as automatr for the rest
+  exec gosu automatr "$0" "$@"
+fi
 
 # Ensure X socket dir exists
 mkdir -p /tmp/.X11-unix
@@ -46,30 +65,37 @@ if [[ -z "${NOVNC_WEB}" ]]; then
   exit 1
 fi
 
-# Ensure venv tools exist
-WS_BIN="${VENV_PATH}/bin/websockify"
-PY_BIN="${VENV_PATH}/bin/python"
+# Ensure required tools exist
+WS_BIN="$(command -v websockify || true)"
+PY_BIN="$(command -v python3 || true)"
 
-if [[ ! -x "${WS_BIN}" ]]; then
-  log "ERROR: websockify not found at ${WS_BIN}"
+if [[ -z "${WS_BIN}" ]] || [[ ! -x "${WS_BIN}" ]]; then
+  log "ERROR: websockify not found in PATH"
   exit 1
 fi
-if [[ ! -x "${PY_BIN}" ]]; then
-  log "ERROR: python not found at ${PY_BIN}"
+if [[ -z "${PY_BIN}" ]] || [[ ! -x "${PY_BIN}" ]]; then
+  log "ERROR: python3 not found in PATH"
   exit 1
 fi
 
 log "Using DISPLAY=${DISPLAY}"
 log "Using noVNC web dir: ${NOVNC_WEB}"
-log "Using venv python: ${PY_BIN}"
+log "Using python: ${PY_BIN}"
 log "Using websockify: ${WS_BIN}"
+log "Using rtpmidid control socket: ${AUTOMATR_RTPMIDI_SOCK}"
 
 # --- Start Xvfb ---
 log "Starting Xvfb on ${DISPLAY} (${AUTOMATR_SCREEN_W}x${AUTOMATR_SCREEN_H}x${AUTOMATR_SCREEN_D})..."
 Xvfb "${DISPLAY}" -screen 0 "${AUTOMATR_SCREEN_W}x${AUTOMATR_SCREEN_H}x${AUTOMATR_SCREEN_D}" -ac +extension RANDR &
 XVFB_PID=$!
 
-sleep 1
+# --- Wait for X to be ready ---
+for _ in $(seq 1 50); do
+  if DISPLAY="${DISPLAY}" xdpyinfo >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
 
 # --- Start WM ---
 log "Starting Openbox..."
@@ -78,13 +104,15 @@ WM_PID=$!
 
 sleep 1
 
-# --- Start Firefox (non-fatal) ---
-log "Starting Firefox (kiosk)..."
-(
-  # Ensure HOME is set for profile stability
-  export HOME="${HOME:-/home/automatr}"
-  firefox-esr
-) || log "WARN: firefox-esr exited immediately" &
+log "Starting Firefox + xterm..."
+export HOME="${HOME:-/home/automatr}"
+
+# Start xterm
+DISPLAY="${DISPLAY}" xterm >/automatr/logs/xterm.log 2>&1 &
+XTERM_PID=$!
+
+# Start firefox
+DISPLAY="${DISPLAY}" firefox-esr >/automatr/logs/firefox.log 2>&1 &
 FIREFOX_PID=$!
 
 # --- Start x11vnc ---
@@ -101,6 +129,15 @@ log "Starting noVNC (websockify) on :6080..."
 ) &
 NOVNC_PID=$!
 
+# --- Start rtpmidid (control socket enabled) ---
+# Do not fail container if rtpmidid dies; keep desktop up for debugging.
+log "Starting rtpmidid (control: ${AUTOMATR_RTPMIDI_SOCK})..."
+mkdir -p "$(dirname "${AUTOMATR_RTPMIDI_SOCK}")" /var/run/rtpmidid
+(
+  exec rtpmidid --control "${AUTOMATR_RTPMIDI_SOCK}"
+) || log "ERROR: rtpmidid exited" &
+RTPMIDI_PID=$!
+
 # --- Start runner (non-fatal to desktop) ---
 log "Starting automation runner..."
 (
@@ -110,18 +147,28 @@ RUNNER_PID=$!
 
 cleanup() {
   log "Shutting down services..."
-  kill "${RUNNER_PID}" "${NOVNC_PID}" "${VNC_PID}" "${FIREFOX_PID}" "${WM_PID}" "${XVFB_PID}" 2>/dev/null || true
+  kill \
+    "${RUNNER_PID}" \
+    "${RTPMIDI_PID}" \
+    "${NOVNC_PID}" \
+    "${VNC_PID}" \
+    "${FIREFOX_PID}" \
+    "${XTERM_PID}" \
+    "${WM_PID}" \
+    "${XVFB_PID}" \
+    2>/dev/null || true
   wait 2>/dev/null || true
   exit 0
 }
 trap cleanup SIGTERM SIGINT
 
 log "All services started."
-log "  VNC:    tcp://localhost:5900"
-log "  noVNC:  http://localhost:6080/vnc.html?autoconnect=1&resize=remote"
-log "  Runner: watching ${AUTOMATR_QUEUE_DIR}"
+log "  VNC:     tcp://localhost:5900"
+log "  noVNC:   http://localhost:6080/vnc.html?autoconnect=1&resize=remote"
+log "  Runner:  watching ${AUTOMATR_QUEUE_DIR}"
+log "  rtpmidid control socket: ${AUTOMATR_RTPMIDI_SOCK}"
 
 # Keep container alive unless core desktop dies.
-# If runner/firefox dies, we keep the desktop + VNC up for debugging.
+# If runner/firefox/xterm/rtpmidid dies, we keep the desktop + VNC up for debugging.
 wait "${XVFB_PID}" "${WM_PID}"
 cleanup

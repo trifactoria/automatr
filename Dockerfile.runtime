@@ -1,17 +1,19 @@
-FROM debian:bookworm-slim
+# Dockerfile.runtime (updated: no venv, no pip; apt websockify + xclip)
+FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
+    gosu \
     xvfb \
     openbox \
+    x11-utils \
     x11vnc \
     xdotool \
+    xterm \
     scrot \
     firefox-esr \
     python3 \
-    python3-venv \
-    python3-pip \
     procps \
     curl \
     ca-certificates \
@@ -19,13 +21,26 @@ RUN apt-get update && apt-get install -y \
     xauth \
     fonts-dejavu-core \
     fonts-liberation \
+    alsa-utils \
+    avahi-daemon \
+    avahi-utils \
+    libnss-mdns \
+    websockify \
+    xclip \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Python venv (avoids PEP 668) ---
-ENV VENV_PATH=/opt/venv
-RUN python3 -m venv ${VENV_PATH} && \
-    ${VENV_PATH}/bin/pip install --no-cache-dir --upgrade pip && \
-    ${VENV_PATH}/bin/pip install --no-cache-dir pyyaml websockify
+# --- rtpmidid (.deb from GitHub releases) ---
+ARG RTPMIDID_VER=24.12
+ARG RTPMIDID_DEB=rtpmidid_24.12.2_amd64.deb
+RUN set -eux; \
+    curl -fsSL -o "/tmp/${RTPMIDID_DEB}" \
+      "https://github.com/davidmoreno/rtpmidid/releases/download/v${RTPMIDID_VER}/${RTPMIDID_DEB}"; \
+    dpkg -i "/tmp/${RTPMIDID_DEB}" || true; \
+    apt-get update; \
+    apt-get -y -f install; \
+    dpkg -i "/tmp/${RTPMIDID_DEB}"; \
+    rm -f "/tmp/${RTPMIDID_DEB}"; \
+    rm -rf /var/lib/apt/lists/*
 
 # --- noVNC web assets (vendored) ---
 ARG NOVNC_VERSION=v1.5.0
@@ -34,13 +49,14 @@ RUN mkdir -p /opt/novnc && \
     tar -xzf /tmp/novnc.tgz -C /opt/novnc --strip-components=1 && \
     rm -f /tmp/novnc.tgz
 
-RUN useradd -m -s /bin/bash automatr && \
-    mkdir -p /automatr/queue && \
+RUN useradd -m -s /bin/bash -G audio automatr && \
+    mkdir -p /automatr/queue /automatr/config /automatr/logs && \
     chown -R automatr:automatr /automatr
 
 ENV HOME=/home/automatr
 ENV AUTOMATR_CONTAINER_ROOT=/automatr
 ENV AUTOMATR_QUEUE_DIR=/automatr/queue
+ENV AUTOMATR_NODE=automatr-node
 ENV AUTOMATR_SCREEN_W=1366
 ENV AUTOMATR_SCREEN_H=768
 ENV AUTOMATR_SCREEN_D=24
@@ -49,9 +65,18 @@ ENV AUTOMATR_NOVNC_WEB=/opt/novnc
 
 EXPOSE 6080 5900
 
+# Ensure Openbox config exists and patch terminal to xterm (deterministic)
+RUN set -eux; \
+    mkdir -p /home/automatr/.config/openbox; \
+    cp -a /etc/xdg/openbox/rc.xml /home/automatr/.config/openbox/rc.xml; \
+    cp -a /etc/xdg/openbox/menu.xml /home/automatr/.config/openbox/menu.xml; \
+    # replace all uses of x-terminal-emulator with xterm
+    sed -i 's/\bx-terminal-emulator\b/xterm/g' /home/automatr/.config/openbox/rc.xml /home/automatr/.config/openbox/menu.xml; \
+    chown -R automatr:automatr /home/automatr/.config/openbox;
+
 COPY runner.py /usr/local/bin/runner.py
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/runner.py /usr/local/bin/entrypoint.sh
 
-USER automatr 
+USER root
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
