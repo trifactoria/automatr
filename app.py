@@ -71,6 +71,7 @@ XMPP_HOST = get_env("AUTOMATR_XMPP_HOST", "automatr-prosody")
 XMPP_PORT = get_env("AUTOMATR_XMPP_PORT", "5222")
 XMPP_MUC = get_env("AUTOMATR_XMPP_MUC", f"automatr@conference.{XMPP_DOMAIN}")
 XMPP_PASSWORD = get_env("AUTOMATR_XMPP_PASSWORD", "supersecret")
+XMPP_INSECURE = get_env("AUTOMATR_XMPP_INSECURE_TLS", "1")
 
 
 # Ensure DB exists/initialized (db.py uses env AUTOMATR_DB_PATH)
@@ -352,6 +353,7 @@ def start_container(name: str):
             "AUTOMATR_XMPP_PORT": str(XMPP_PORT),
             "AUTOMATR_XMPP_MUC": XMPP_MUC,
             "AUTOMATR_XMPP_PASSWORD": XMPP_PASSWORD,
+            "AUTOMATR_XMPP_INSECURE_TLS": XMPP_INSECURE,
         }
         
         volumes = {str(container_dir(name)): {"bind": CONTAINER_ROOT, "mode": "rw"}}

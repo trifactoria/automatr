@@ -14,9 +14,8 @@ modules_enabled = {
   "tls";
   "dialback";
   "disco";
-
-  -- MUC component support
-  "muc";
+  "pep";
+  "bookmarks";
 }
 
 -- If you want message carbons later: add "carbons" and the xep module.
@@ -60,6 +59,6 @@ Component "conference.automatr-xmpp.local" "muc"
   name = "Automatr MUC"
 
   -- Optional: lock down room creation
-  restrict_room_creation = true
+  restrict_room_creation = false
   -- If you want Andy to be able to create rooms:
   -- admins = { "andy@automatr-xmpp.local" }

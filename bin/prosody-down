@@ -9,3 +9,5 @@ if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
 else
   echo "$NAME is not running"
 fi
+
+docker rm -f automatr-prosody

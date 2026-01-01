@@ -7,8 +7,9 @@ DOMAIN="${AUTOMATR_XMPP_DOMAIN:-automatr-xmpp.local}"
 CFG="$(pwd)/config/prosody/prosody.cfg.lua"
 VOL="automatr-prosody-data"
 
-# Optional: put Prosody on same network as runtime containers
-NET="${DOCKER_NETWORK:-}"
+# Network to use (default: automatr-net)
+NET="${DOCKER_NETWORK:-automatr-net}"
+ALIAS="${DOMAIN}"
 
 if [[ ! -f "$CFG" ]]; then
   echo "Missing prosody config: $CFG" >&2
@@ -28,19 +29,14 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
   exit 0
 fi
 
-net_args=()
-if [[ -n "$NET" ]]; then
-  net_args+=(--network "$NET")
-fi
-
 docker run -d \
   --name "$NAME" \
-  --network automatr-net \
+  --network "$NET" \
+  --network-alias "$ALIAS" \
   -p 5222:5222 \
   -p 5280:5280 \
-  "${net_args[@]}" \
   -v "$CFG:/etc/prosody/prosody.cfg.lua:ro" \
   -v "$VOL:/var/lib/prosody" \
   "$IMAGE"
 
-echo "Prosody is up: $NAME (domain: $DOMAIN)"
+echo "Prosody is up: $NAME (domain: $DOMAIN, net: $NET, alias: $ALIAS)"
