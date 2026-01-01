@@ -2,12 +2,9 @@
 from __future__ import annotations
 
 import os
-import re
-import shlex
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Iterable, Optional
 
 # Container mount root is /automatr
 AUTOMATR_ROOT = Path(os.environ.get("AUTOMATR_CONTAINER_ROOT", "/automatr"))
@@ -16,7 +13,9 @@ STOP_FILE = AUTOMATR_ROOT / "STOP"
 # Best-effort clipboard tool. Prefer xclip; xsel could be added later.
 XCLIP = os.environ.get("AUTOMATR_XCLIP_BIN", "xclip")
 XDOTOOL = os.environ.get("AUTOMATR_XDOTOOL_BIN", "xdotool")
-NOTIFY = os.environ.get("AUTOMATR_NOTIFY_BIN", "notify-send")
+
+# Host notification queue (lives inside /automatr which is a bind-mount)
+NOTIFY_QUEUE_DIR = Path(os.environ.get("AUTOMATR_NOTIFY_QUEUE_DIR", str(AUTOMATR_ROOT / "notify.queue")))
 
 # A shared in-process buffer, updated by dragcopy/copy actions
 _buffer: str = ""
@@ -45,11 +44,21 @@ def _run(argv: list[str], *, check: bool = True, capture: bool = False, text: bo
 
 
 def notify(msg: str, title: str = "AUTOMATR") -> None:
-    """Best-effort notification; never crashes the automation."""
+    """
+    Host notification:
+    - DO NOT call notify-send in the container.
+    - Enqueue a small text file in /automatr/notify.queue.
+    Host-side app.py consumes it and runs notify-send.
+    """
     check_stop()
     try:
-        subprocess.run([NOTIFY, title, str(msg)], check=False)
+        NOTIFY_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time() * 1000)
+        path = NOTIFY_QUEUE_DIR / f"notify-{ts}.txt"
+        # format: first line title, second line message
+        path.write_text(f"{title}\n{str(msg)}\n", encoding="utf-8")
     except Exception:
+        # never crash automation over notifications
         pass
 
 
@@ -68,12 +77,16 @@ def get_buffer() -> str:
 
 
 def _clipboard_set(text: str) -> None:
-    # xclip -selection clipboard
-    _run([XCLIP, "-selection", "clipboard"], capture=False, text=False, check=True)
-    # NOTE: The above call doesn't feed stdin. We'll do it properly:
     check_stop()
-    p = subprocess.Popen([XCLIP, "-selection", "clipboard"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Feed stdin to xclip
+    p = subprocess.Popen(
+        [XCLIP, "-selection", "clipboard"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     try:
+        assert p.stdin is not None
         p.stdin.write((text or "").encode("utf-8"))
         p.stdin.close()
         p.wait(timeout=2)
@@ -99,7 +112,6 @@ def click(button: int = 1) -> None:
 
 
 def key(keys: str) -> None:
-    # keys: "ctrl+c" etc.
     _run([XDOTOOL, "key", str(keys)])
 
 
@@ -125,7 +137,6 @@ def dragcopy(start_x: int, start_y: int, end_x: int, end_y: int, button: int = 1
     """
     check_stop()
     drag(start_x, start_y, end_x, end_y, button=button)
-    # small settle to allow selection highlight
     sleep(0.05)
     key("ctrl+c")
     sleep(0.05)

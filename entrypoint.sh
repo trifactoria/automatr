@@ -10,6 +10,7 @@ set -euo pipefail
 : "${AUTOMATR_NOVNC_WEB:=/opt/novnc}"
 
 # RTP-MIDI control socket (host can poke this if needed)
+: "${AUTOMATR_ENABLE_RTPMIDI:=0}"
 : "${AUTOMATR_RTPMIDI_SOCK:=/run/rtpmidid/control.sock}"
 
 log() { echo "[entrypoint] $*"; }
@@ -129,14 +130,19 @@ log "Starting noVNC (websockify) on :6080..."
 ) &
 NOVNC_PID=$!
 
-# --- Start rtpmidid (control socket enabled) ---
-# Do not fail container if rtpmidid dies; keep desktop up for debugging.
-log "Starting rtpmidid (control: ${AUTOMATR_RTPMIDI_SOCK})..."
-mkdir -p "$(dirname "${AUTOMATR_RTPMIDI_SOCK}")" /var/run/rtpmidid
-(
-  exec rtpmidid --control "${AUTOMATR_RTPMIDI_SOCK}"
-) || log "ERROR: rtpmidid exited" &
-RTPMIDI_PID=$!
+
+# --- Start rtpmidid (optional) ---
+if [[ "${AUTOMATR_ENABLE_RTPMIDI}" == "1" ]]; then
+  log "Starting rtpmidid (control: ${AUTOMATR_RTPMIDI_SOCK})..."
+  mkdir -p "$(dirname "${AUTOMATR_RTPMIDI_SOCK}")" /var/run/rtpmidid
+  (
+    exec rtpmidid --control "${AUTOMATR_RTPMIDI_SOCK}"
+  ) || log "ERROR: rtpmidid exited" &
+  RTPMIDI_PID=$!
+else
+  log "rtpmidid disabled (AUTOMATR_ENABLE_RTPMIDI=0)"
+  RTPMIDI_PID=""
+fi
 
 # --- Start runner (non-fatal to desktop) ---
 log "Starting automation runner..."

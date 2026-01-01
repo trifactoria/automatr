@@ -1,34 +1,69 @@
 #!/usr/bin/env python3
-# bin/export.py
-
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import shutil
 import sqlite3
 import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 
-DEFAULT_DB_PATH = Path(os.environ.get("AUTOMATR_DB_PATH", "./data/automatr.db")).resolve()
-PROJECT_ROOT = Path(os.environ.get("AUTOMATR_PROJECT_ROOT", str(Path.cwd()))).resolve()
+# ============================================================
+# env / paths
+# ============================================================
 
-# Tracked wrapper (host)
-BIN_ACTIONS = (PROJECT_ROOT / "bin" / "automatr_actions.py").resolve()
-
-# Untracked durable scripts (host)
-BIN_CONTAINERS_DIR = (PROJECT_ROOT / "bin" / "containers").resolve()
-
-# Untracked container mounts (host)
-DATA_DIR = Path(os.environ.get("AUTOMATR_DATA_DIR", str(PROJECT_ROOT / "data"))).resolve()
+def get_env(key: str, default: str = "") -> str:
+    return os.getenv(key, default)
 
 
-def die(msg: str) -> None:
-    print(f"[export] ERROR: {msg}", file=sys.stderr)
-    raise SystemExit(1)
+PROJECT_ROOT = Path(get_env("AUTOMATR_PROJECT_ROOT", str(Path.cwd()))).resolve()
+DATA_DIR = Path(get_env("AUTOMATR_DATA_DIR", str(PROJECT_ROOT / "data"))).resolve()
+DB_PATH = Path(get_env("AUTOMATR_DB_PATH", str(DATA_DIR / "automatr.db"))).resolve()
+
+BIN_DIR = PROJECT_ROOT / "bin"
+BIN_ACTIONS = Path(get_env("AUTOMATR_BIN_ACTIONS", str(BIN_DIR / "automatr_actions.py"))).resolve()
+BIN_CONTAINERS_DIR = Path(get_env("AUTOMATR_BIN_CONTAINERS_DIR", str(BIN_DIR / "containers"))).resolve()
+
+
+# ============================================================
+# tiny helpers
+# ============================================================
+
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def chmod_exec(p: Path) -> None:
+    try:
+        st = p.stat()
+        p.chmod(st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except Exception:
+        pass
+
+
+def copy_file(src: Path, dst: Path) -> None:
+    """Copy file (no symlinks). Avoid SameFileError. Remove legacy symlink dst first."""
+    ensure_dir(dst.parent)
+
+    try:
+        if dst.is_symlink():
+            dst.unlink()
+    except FileNotFoundError:
+        pass
+
+    try:
+        if src.exists() and dst.exists() and src.resolve() == dst.resolve():
+            return
+    except Exception:
+        pass
+
+    shutil.copy2(src, dst)
+    chmod_exec(dst)
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -38,381 +73,417 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def snake_case(name: str) -> str:
-    s = (name or "").strip().lower()
-    s = re.sub(r"\s+", "_", s)
-    s = re.sub(r"[^a-z0-9_]", "_", s)
+def snake(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"[^a-zA-Z0-9_]+", "_", s)
     s = re.sub(r"_+", "_", s).strip("_")
     if not s:
-        s = "var"
+        return ""
     if s[0].isdigit():
         s = "_" + s
-    return s
+    return s.lower()
 
 
-def bool_literal(text: str) -> str:
-    v = (text or "").strip().lower()
-    return "True" if v in ("1", "true", "yes", "y", "on") else "False"
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def literal_py(typ: str, value: str) -> str:
-    if typ == "int":
-        return str(int(value))
-    if typ == "float":
-        return str(float(value))
-    if typ == "bool":
-        return bool_literal(value)
-    return repr("" if value is None else str(value))
-
-
-def ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-
-def ensure_symlink(dst: Path, src: Path) -> None:
-    ensure_dir(dst.parent)
-    if dst.is_symlink() or dst.exists():
-        try:
-            if dst.is_symlink() and dst.resolve() == src.resolve():
-                return
-        except Exception:
-            pass
-        dst.unlink()
-    dst.symlink_to(src)
-
-
-def chmod_exec(path: Path) -> None:
-    mode = path.stat().st_mode
-    path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
+# ============================================================
+# export model
+# ============================================================
 
 @dataclass
 class VarDef:
-    original_key: str
+    key: str
     py_name: str
     typ: str
     value: str
+    description: str = ""
 
 
-def load_vars(conn: sqlite3.Connection, automation: str) -> list[VarDef]:
-    rows = conn.execute(
-        "SELECT key, type, value FROM automation_vars WHERE automation_name=? ORDER BY key",
-        (automation,),
-    ).fetchall()
-
-    used: dict[str, str] = {}
-    out: list[VarDef] = []
-    for r in rows:
-        orig = r["key"]
-        py = snake_case(orig)
-        if py in used:
-            die(f'var name collision after sanitize: "{used[py]}" and "{orig}" -> "{py}"')
-        used[py] = orig
-        out.append(VarDef(original_key=orig, py_name=py, typ=r["type"], value=r["value"]))
-    return out
-
-
-def load_steps(conn: sqlite3.Connection, automation: str) -> list[sqlite3.Row]:
-    rows = conn.execute(
-        """
-        SELECT id, step_num, label, action, enabled, note
-          FROM automation_steps
-         WHERE automation_name=?
-         ORDER BY step_num
-        """,
-        (automation,),
-    ).fetchall()
-
-    if not rows:
-        die(f'no steps found for automation "{automation}"')
-
-    expected = 1
-    for r in rows:
-        if int(r["step_num"]) != expected:
-            die(f"step numbers must be contiguous 1..N; expected {expected} but saw {r['step_num']}")
-        expected += 1
-
-    return rows
-
-
-def load_params(conn: sqlite3.Connection, step_id: int) -> dict[str, str]:
-    rows = conn.execute(
-        "SELECT key, type, value FROM step_params WHERE step_id=? ORDER BY key",
-        (step_id,),
-    ).fetchall()
-
-    params: dict[str, str] = {}
-    for r in rows:
-        params[r["key"]] = literal_py(r["type"], r["value"])
-    return params
-
-
-def load_clauses(conn: sqlite3.Connection, step_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT *
-          FROM step_clauses
-         WHERE step_id=?
-         ORDER BY clause_order
-        """,
-        (step_id,),
-    ).fetchall()
-
-
-def expr_term(kind: str, typ: str, value: Optional[str], varmap_by_py: dict[str, VarDef]) -> str:
-    if kind == "buffer":
-        return "aa.get_buffer()"
-    if kind == "var":
-        if not value:
-            die("clause var reference missing lhs_value/rhs_value")
-        py = snake_case(value)
-        if py not in varmap_by_py:
-            die(f'clause references var "{value}" (sanitized "{py}") not found in automation_vars')
-        return py
-    return literal_py(typ, value or "")
-
-
-def cast_expr(typ: str, expr: str) -> str:
+def convert_expr(expr: str, typ: str) -> str:
     if typ == "int":
         return f"int({expr})"
     if typ == "float":
         return f"float({expr})"
     if typ == "bool":
-        return f"(({expr}).strip().lower() in ('1','true','yes','y','on'))"
+        return f"(str({expr}).strip().lower() in ('1','true','yes','y','on'))"
     return f"str({expr})"
 
 
-def predicate_expr(row: sqlite3.Row, varmap_by_py: dict[str, VarDef]) -> str:
-    if row["head"] == "else":
-        return "True"
+def _lit_expr(val: Any, typ: str) -> str:
+    s = "" if val is None else str(val)
+    if typ == "str":
+        return repr(s)
+    if typ == "int":
+        return f"int({repr(s or '0')})"
+    if typ == "float":
+        return f"float({repr(s or '0')})"
+    if typ == "bool":
+        return f"(str({repr(s or 'false')}).strip().lower() in ('1','true','yes','y','on'))"
+    return repr(s)
 
-    lhs_kind = row["lhs_kind"]
-    rhs_kind = row["rhs_kind"]
-    op = row["op"]
-    lhs_type = row["lhs_type"]
-    rhs_type = row["rhs_type"]
-    lhs_val = row["lhs_value"]
-    rhs_val = row["rhs_value"]
 
-    if not (lhs_kind and rhs_kind and op and lhs_type and rhs_type):
-        die("clause predicate fields incomplete for if/elif")
+def _resolve_var_pyname(var_name: str, var_by_key: dict[str, VarDef], var_by_py: dict[str, VarDef]) -> str:
+    if var_name in var_by_key:
+        return var_by_key[var_name].py_name
+    sn = snake(var_name)
+    if sn and sn in var_by_py:
+        return var_by_py[sn].py_name
+    raise ValueError(f"unknown_var:{var_name}")
 
-    lhs_raw = expr_term(lhs_kind, lhs_type, lhs_val, varmap_by_py)
-    rhs_raw = expr_term(rhs_kind, rhs_type, rhs_val, varmap_by_py)
 
-    lhs = cast_expr(lhs_type, lhs_raw)
-    rhs = cast_expr(rhs_type, rhs_raw)
+def predicate_expr(row: sqlite3.Row, var_by_key: dict[str, VarDef], var_by_py: dict[str, VarDef]) -> tuple[str, bool]:
+    def side(kind: str, typ: str, value: Any) -> tuple[str, bool]:
+        needs_re = False
+        if kind == "buffer":
+            return convert_expr("aa.get_buffer()", typ), needs_re
+        if kind == "var":
+            py = _resolve_var_pyname(str(value or ""), var_by_key, var_by_py)
+            return convert_expr(py, typ), needs_re
+        return _lit_expr(value, typ), needs_re
 
-    if op in ("==", "!=", ">", ">=", "<", "<="):
-        return f"({lhs} {op} {rhs})"
+    lhs_kind = row["lhs_kind"] or ""
+    lhs_type = row["lhs_type"] or "str"
+    lhs_value = row["lhs_value"]
+
+    rhs_kind = row["rhs_kind"] or ""
+    rhs_type = row["rhs_type"] or "str"
+    rhs_value = row["rhs_value"]
+
+    lhs, needs_re_l = side(lhs_kind, lhs_type, lhs_value)
+    rhs, needs_re_r = side(rhs_kind, rhs_type, rhs_value)
+
+    op = row["op"] or ""
+    needs_re = needs_re_l or needs_re_r
+
+    allowed = {"==", "!=", ">", "<", ">=", "<=", "contains", "startswith", "endswith", "regex"}
+    if op not in allowed:
+        raise ValueError(f"bad_op:{op}")
+
     if op == "contains":
-        return f"({rhs} in {lhs})"
+        return f"({rhs} in {lhs})", needs_re
     if op == "startswith":
-        return f"({lhs}.startswith({rhs}))"
+        return f"(str({lhs}).startswith(str({rhs})))", needs_re
     if op == "endswith":
-        return f"({lhs}.endswith({rhs}))"
+        return f"(str({lhs}).endswith(str({rhs})))", needs_re
     if op == "regex":
-        return f"(re.search({rhs}, {lhs}) is not None)"
+        needs_re = True
+        return f"(re.search(str({rhs}), str({lhs})) is not None)", needs_re
 
-    die(f"unsupported operator: {op}")
-    return "False"
+    return f"({lhs} {op} {rhs})", needs_re
+
+
+def _emit_clause_action(lines: list[str], row: sqlite3.Row) -> None:
+    act = row["action"]
+    actv = row["action_value"] if row["action_value"] is not None else ""
+    if act == "goto":
+        lines.append(f"        return int({repr(str(actv))})")
+    elif act == "continue":
+        lines.append("        return None")
+    elif act == "notify":
+        lines.append(f"        aa.notify({repr(str(actv))})")
+        lines.append("        return None")
+    elif act == "stop":
+        tag = str(row["stop_tag"] or "").upper()
+        msg = str(actv)
+        if tag == "SUCCESS":
+            lines.append(f"        aa.stop_success({repr(msg)})")
+        elif tag == "FAILURE":
+            lines.append(f"        aa.stop_failure({repr(msg)})")
+        else:
+            lines.append(f"        aa.stop_break({repr(msg)})")
+    else:
+        raise ValueError(f"bad_clause_action:{act}")
 
 
 def compile_script_text(
-    automation: str, vars_: list[VarDef], steps: list[sqlite3.Row], conn: sqlite3.Connection
+    automation_name: str,
+    vars_: list[VarDef],
+    steps: list[dict[str, Any]],
+    conn: sqlite3.Connection,
 ) -> str:
-    varmap_by_py = {v.py_name: v for v in vars_}
+    var_by_key = {v.key: v for v in vars_}
+    var_by_py = {v.py_name: v for v in vars_}
+
+    needs_re = False
+    for step in steps:
+        step_id = int(step["step_id"])
+        rows = conn.execute(
+            "SELECT * FROM step_clauses WHERE step_id=? ORDER BY clause_order ASC",
+            (step_id,),
+        ).fetchall()
+        for r in rows:
+            if (r["op"] or "") == "regex":
+                needs_re = True
 
     lines: list[str] = []
     lines.append("#!/usr/bin/env python3")
     lines.append("from __future__ import annotations")
     lines.append("")
-    lines.append("import re")
-    lines.append("import sys")
-    lines.append("")
     lines.append("import automatr_actions as aa")
-    lines.append("")
-    lines.append(f"# automation: {automation}")
+    if needs_re:
+        lines.append("import re")
     lines.append("")
 
+    # vars
+    for v in vars_:
+        if v.typ == "str":
+            lines.append(f"{v.py_name} = {repr(v.value or '')}")
+        elif v.typ == "int":
+            lines.append(f"{v.py_name} = int({repr(v.value or '0')})")
+        elif v.typ == "float":
+            lines.append(f"{v.py_name} = float({repr(v.value or '0')})")
+        elif v.typ == "bool":
+            lines.append(
+                f"{v.py_name} = (str({repr(v.value or 'false')}).strip().lower() in ('1','true','yes','y','on'))"
+            )
+        else:
+            lines.append(f"{v.py_name} = {repr(v.value)}")
     if vars_:
-        lines.append("# --- automation vars ---")
-        for v in vars_:
-            lines.append(f"{v.py_name} = {literal_py(v.typ, v.value)}  # {v.original_key}")
-        lines.append("")
-    else:
-        lines.append("# (no vars)")
         lines.append("")
 
-    n_steps = len(steps)
-    lines.append(f"_N_STEPS = {n_steps}")
-    lines.append("")
+    # steps
+    for step in steps:
+        step_num = int(step["step_num"])
+        action = str(step["action"] or "").strip()
+        enabled = bool(int(step.get("enabled", 1))) if isinstance(step.get("enabled"), (int, str)) else bool(step.get("enabled", True))
 
-    for s in steps:
-        step_id = int(s["id"])
-        step_num = int(s["step_num"])
-        label = (s["label"] or "").strip()
-        action = (s["action"] or "").strip()
-        enabled = int(s["enabled"]) == 1
+        lines.append(f"def step_{step_num}():")
+        lines.append("    aa.check_stop()")
 
-        if not action:
-            die(f"step {step_num} has empty action")
-
-        params = load_params(conn, step_id)
-        clauses = load_clauses(conn, step_id)
-
-        lines.append(f"def step_{step_num}() -> int | None:")
-        if label:
-            lines.append(f"    # {label}")
         if not enabled:
-            lines.append("    # disabled")
             lines.append("    return None")
             lines.append("")
             continue
 
-        # action
-        if params:
-            kwargs = ", ".join([f"{k}={v}" for k, v in params.items()])
-            lines.append(f"    aa.{action}({kwargs})")
-        else:
-            lines.append(f"    aa.{action}()")
+        # action call
+        params = step.get("params") or []
+        kwargs: list[str] = []
+        for p in params:
+            key = str(p["key"])
+            typ = str(p["type"])
+            val = p["value"]
+            if typ == "str":
+                kwargs.append(f"{key}={repr(str(val))}")
+            elif typ == "int":
+                kwargs.append(f"{key}=int({repr(str(val))})")
+            elif typ == "float":
+                kwargs.append(f"{key}=float({repr(str(val))})")
+            elif typ == "bool":
+                kwargs.append(f"{key}=(str({repr(str(val))}).strip().lower() in ('1','true','yes','y','on'))")
+            else:
+                kwargs.append(f"{key}={repr(val)}")
 
-        if clauses:
-            lines.append("    # clauses")
-            for idx, c in enumerate(clauses):
-                head = c["head"]
-                pred = predicate_expr(c, varmap_by_py)
-
-                if idx == 0:
-                    lines.append(f"    if {pred}:")
-                else:
-                    if head == "elif":
-                        lines.append(f"    elif {pred}:")
-                    elif head == "else":
-                        lines.append("    else:")
-                    else:
-                        die("clause chain invalid: 'if' after first clause; use elif/else ordering")
-
-                action_kind = c["action"]
-                stop_tag = c["stop_tag"]
-                action_value = c["action_value"]
-
-                if action_kind == "goto":
-                    if not action_value:
-                        die("goto requires action_value (target step num)")
-                    tgt = int(action_value)
-                    if tgt < 1 or tgt > n_steps:
-                        die(f"goto target {tgt} out of range 1..{n_steps}")
-                    lines.append(f"        return {tgt}")
-
-                elif action_kind == "continue":
-                    lines.append("        return None")
-
-                elif action_kind == "notify":
-                    lines.append(f"        aa.notify({repr(action_value or '')})")
-                    lines.append("        return None")
-
-                elif action_kind == "stop":
-                    if stop_tag not in ("SUCCESS", "FAILURE", "BREAK"):
-                        die("stop requires stop_tag SUCCESS|FAILURE|BREAK")
-                    msg = action_value or ""
-                    if stop_tag == "SUCCESS":
-                        lines.append(f"        aa.stop_success({repr(msg)})")
-                    elif stop_tag == "FAILURE":
-                        lines.append(f"        aa.stop_failure({repr(msg)})")
-                    else:
-                        lines.append(f"        aa.stop_break({repr(msg)})")
-                    lines.append("        return None")
-
-                else:
-                    die(f"unsupported clause action: {action_kind}")
-
+        arg_s = ", ".join(kwargs)
+        if not action:
+            lines.append("    return None")
             lines.append("")
+            continue
+
+        lines.append(f"    aa.{action}({arg_s})" if arg_s else f"    aa.{action}()")
+
+        # clauses
+        step_id = int(step["step_id"])
+        rows = conn.execute(
+            "SELECT * FROM step_clauses WHERE step_id=? ORDER BY clause_order ASC",
+            (step_id,),
+        ).fetchall()
+
+        if rows:
+            has_if = any((r["head"] in ("if", "elif")) for r in rows)
+
+            for row in rows:
+                head = row["head"]
+
+                if head == "else":
+                    if has_if:
+                        # real python else
+                        lines.append("    else:")
+                        _emit_clause_action(lines, row)
+                    else:
+                        # IMPORTANT: "else" without any if/elif means unconditional clause
+                        # Emit as direct statements (no else:)
+                        # Keep indentation consistent with other clause bodies:
+                        # We'll emit a one-liner block by temporarily using clause emitter at correct indent.
+                        # Easiest: emit a fake 'if True:' block.
+                        lines.append("    if True:")
+                        _emit_clause_action(lines, row)
+                    continue
+
+                pred, _ = predicate_expr(row, var_by_key, var_by_py)
+                if head == "if":
+                    lines.append(f"    if ({pred}):")
+                elif head == "elif":
+                    lines.append(f"    elif ({pred}):")
+                else:
+                    raise ValueError(f"bad_clause_head:{head}")
+
+                _emit_clause_action(lines, row)
 
         lines.append("    return None")
         lines.append("")
 
+    # main loop
     lines.append("def main() -> int:")
     lines.append("    pc = 1")
-    lines.append("    while 1 <= pc <= _N_STEPS:")
+    lines.append("    fns = {")
+    for step in steps:
+        n = int(step["step_num"])
+        lines.append(f"        {n}: step_{n},")
+    lines.append("    }")
+    lines.append("    while pc in fns:")
     lines.append("        aa.check_stop()")
-    lines.append("        fn = globals().get(f'step_{pc}')")
-    lines.append("        if fn is None:")
-    lines.append("            raise RuntimeError(f'missing step function: step_{pc}')")
+    lines.append("        fn = fns[pc]")
     lines.append("        nxt = fn()")
-    lines.append("        pc = int(nxt) if isinstance(nxt, int) else (pc + 1)")
+    lines.append("        if nxt is None:")
+    lines.append("            pc += 1")
+    lines.append("        else:")
+    lines.append("            pc = int(nxt)")
     lines.append("    return 0")
     lines.append("")
     lines.append("if __name__ == '__main__':")
-    lines.append("    try:")
-    lines.append("        raise SystemExit(main())")
-    lines.append("    except SystemExit:")
-    lines.append("        raise")
-    lines.append("    except Exception as e:")
-    lines.append("        aa.notify(f'CRASH: {e}', title='AUTOMATR FAILURE')")
-    lines.append("        raise")
+    lines.append("    raise SystemExit(main())")
+    lines.append("")
 
     return "\n".join(lines)
 
 
+def _set_compiled_script(conn: sqlite3.Connection, name: str, compiled_py: str) -> None:
+    compiled_py = compiled_py or ""
+    h = _sha256(compiled_py) if compiled_py else None
+    conn.execute(
+        """
+        UPDATE automations
+           SET compiled_py=?,
+               compiled_hash=?,
+               compiled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE name=?
+        """,
+        (compiled_py, h, name),
+    )
+
+
 def main(argv: list[str]) -> int:
-    # Required CLI: bin/export.py <container> <automation>
     if len(argv) != 3:
-        print("usage: bin/export.py <container> <automation>", file=sys.stderr)
+        print("usage: export.py <container> <automation>", file=sys.stderr)
         return 2
 
     container = argv[1].strip()
     automation = argv[2].strip()
-    if not container or not automation:
-        die("container and automation required")
 
-    if not DEFAULT_DB_PATH.exists():
-        die(f"db not found: {DEFAULT_DB_PATH}")
+    if not container:
+        print("container_required", file=sys.stderr)
+        return 2
+    if not automation:
+        print("automation_required", file=sys.stderr)
+        return 2
 
-    if not BIN_ACTIONS.exists():
-        die(f"missing tracked wrapper: {BIN_ACTIONS}")
-
-    # Durable host target (untracked)
     durable_dir = BIN_CONTAINERS_DIR / container / "bin" / "automations"
     durable_py = durable_dir / f"{automation}.py"
 
-    # Runtime mount root (untracked)
     mount_root = DATA_DIR / container
     mount_bin = mount_root / "bin"
-
-    # Canonical runtime links:
-    # data/<container>/bin/automatr_actions.py -> bin/automatr_actions.py
-    # data/<container>/bin/<automation> -> bin/containers/<container>/bin/automations/<automation>.py
     runtime_actions = mount_bin / "automatr_actions.py"
-    runtime_link = mount_bin / automation
+    runtime_script = mount_bin / automation
 
-    # Ensure container dirs exist
     ensure_dir(durable_dir)
-    ensure_dir(mount_root)
     ensure_dir(mount_bin)
     ensure_dir(mount_root / "logs")
     ensure_dir(mount_root / "queue")
     ensure_dir(mount_root / "pid")
     ensure_dir(mount_root / "config")
+    ensure_dir(mount_root / "notify.queue")
 
-    with connect(DEFAULT_DB_PATH) as conn:
-        row = conn.execute("SELECT name FROM automations WHERE name=?", (automation,)).fetchone()
-        if not row:
-            die(f'automation not found: "{automation}"')
+    if not DB_PATH.exists():
+        print(f"db_not_found:{DB_PATH}", file=sys.stderr)
+        return 2
 
-        vars_ = load_vars(conn, automation)
-        steps = load_steps(conn, automation)
+    if not BIN_ACTIONS.exists():
+        print(f"automatr_actions_not_found:{BIN_ACTIONS}", file=sys.stderr)
+        return 2
+
+    with connect(DB_PATH) as conn:
+        arow = conn.execute("SELECT * FROM automations WHERE name=?", (automation,)).fetchone()
+        if not arow:
+            print(f"automation_not_found:{automation}", file=sys.stderr)
+            return 2
+
+        vrows = conn.execute(
+            "SELECT key, type, value, description FROM automation_vars WHERE automation_name=? ORDER BY key ASC",
+            (automation,),
+        ).fetchall()
+
+        vars_: list[VarDef] = []
+        seen_py: set[str] = set()
+        for vr in vrows:
+            key = str(vr["key"])
+            py = snake(key)
+            if not py:
+                print(f"var_empty_after_sanitize:{key}", file=sys.stderr)
+                return 2
+            if py in seen_py:
+                print(f"var_collision_after_sanitize:{key}->{py}", file=sys.stderr)
+                return 2
+            seen_py.add(py)
+            vars_.append(
+                VarDef(
+                    key=key,
+                    py_name=py,
+                    typ=str(vr["type"]),
+                    value=str(vr["value"] if vr["value"] is not None else ""),
+                    description=str(vr["description"] if vr["description"] is not None else ""),
+                )
+            )
+
+        srows = conn.execute(
+            "SELECT id, step_num, label, action, enabled, note FROM automation_steps WHERE automation_name=? ORDER BY step_num ASC",
+            (automation,),
+        ).fetchall()
+
+        if not srows:
+            print(f"no_steps:{automation}", file=sys.stderr)
+            return 2
+
+        steps: list[dict[str, Any]] = []
+        for sr in srows:
+            step_id = int(sr["id"])
+            prows = conn.execute(
+                "SELECT key, type, value FROM step_params WHERE step_id=? ORDER BY key ASC",
+                (step_id,),
+            ).fetchall()
+            params = [{"key": r["key"], "type": r["type"], "value": r["value"]} for r in prows]
+
+            steps.append(
+                {
+                    "step_id": step_id,
+                    "step_num": int(sr["step_num"]),
+                    "label": str(sr["label"] or ""),
+                    "action": str(sr["action"] or ""),
+                    "enabled": int(sr["enabled"] or 0),
+                    "note": str(sr["note"] or ""),
+                    "params": params,
+                }
+            )
+
         script = compile_script_text(automation, vars_, steps, conn)
+
+        try:
+            _set_compiled_script(conn, automation, script)
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
     durable_py.write_text(script, encoding="utf-8")
     chmod_exec(durable_py)
 
-    ensure_symlink(runtime_actions, BIN_ACTIONS)
-    ensure_symlink(runtime_link, durable_py)
+    copy_file(BIN_ACTIONS, runtime_actions)
+    copy_file(durable_py, runtime_script)
 
-    print(f"[export] wrote: {durable_py}")
-    print(f"[export] linked: {runtime_link} -> {durable_py}")
-    print(f"[export] linked: {runtime_actions} -> {BIN_ACTIONS}")
+    print(f"[export] ok container={container} automation={automation}")
+    print(f"[export] durable={durable_py}")
+    print(f"[export] runtime_script={runtime_script}")
+    print(f"[export] runtime_actions={runtime_actions}")
     return 0
 
 

@@ -120,14 +120,12 @@ def run_automation(automation: str, job_path: Path) -> int:
     if not script_path.exists():
         raise RuntimeError(f"script_not_found: {script_path}")
 
-    # Your contract: shebang + executable bit always
     if not os.access(script_path, os.X_OK):
         raise RuntimeError(f"script_not_executable: {script_path}")
 
     start_id = str(int(time.time() * 1000))
     append_log(f"### STARTID:{start_id} automation={automation} job={job_path.name} at={utc_now_iso()} ###")
 
-    # New process group so we can stop instantly
     p = subprocess.Popen(
         [str(script_path)],
         cwd=str(AUTOMATR_ROOT),
@@ -149,7 +147,6 @@ def run_automation(automation: str, job_path: Path) -> int:
                 break
             append_log(line.rstrip("\n"))
 
-        # Ensure process is reaped
         try:
             return p.wait(timeout=2)
         except subprocess.TimeoutExpired:
@@ -168,7 +165,6 @@ def main() -> None:
     while True:
         try:
             if stop_requested():
-                # STOP latch prevents new runs; do nothing until host removes it.
                 time.sleep(POLL_SECONDS)
                 continue
 
@@ -177,12 +173,11 @@ def main() -> None:
                 time.sleep(POLL_SECONDS)
                 continue
 
-            # Claim job by renaming (atomic on same fs)
             claimed = job.with_suffix(".job.running")
             try:
                 job.rename(claimed)
             except FileNotFoundError:
-                continue  # race
+                continue
 
             try:
                 automation = load_job(claimed).strip()
@@ -193,7 +188,6 @@ def main() -> None:
                 append_log(f"[runner] ERROR: {e}")
                 log_line(f"ERROR: {e}")
             finally:
-                # remove job file no matter what (archive behavior can come later)
                 try:
                     claimed.unlink()
                 except FileNotFoundError:
