@@ -15,7 +15,7 @@ SEQ_GID="$(stat -c %g /dev/snd/seq)"
 mkdir -p "$PWD/data/$NAME"
 
 docker run --rm -it \
-  --network host \
+  --network "${DOCKER_NETWORK:-automatr-net}" \
   --device /dev/snd/seq \
   --group-add "$SEQ_GID" \
   -e "AUTOMATR_NODE=$NAME" \

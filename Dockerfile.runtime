@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     scrot \
     firefox-esr \
     python3 \
+    python3-slixmpp \
     procps \
     curl \
     ca-certificates \
@@ -75,8 +76,9 @@ RUN set -eux; \
     chown -R automatr:automatr /home/automatr/.config/openbox;
 
 COPY runner.py /usr/local/bin/runner.py
+COPY bin/agent_bot.py /usr/local/bin/agent_bot.py
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/runner.py /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/runner.py /usr/local/bin/entrypoint.sh /usr/local/bin/agent_bot.py
 
 USER root
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+docker run --rm -it --network automatr-net alpine sh -lc '
+  apk add --no-cache busybox-extras >/dev/null
+  nc -vz automatr-prosody 5222
+'
