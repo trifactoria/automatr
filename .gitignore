@@ -27,3 +27,4 @@ data/**
 *.db-journal
 *.zip
 bin/containers/**
+config/**
