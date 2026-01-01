@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 IGNORE_LIST=(
+'*/.next/*'
 '*/node_modules/*'
 '.git/*'
 'src/public/*'
