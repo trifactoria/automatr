@@ -1,11 +1,12 @@
 # app.py
-
 from __future__ import annotations
 
 import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -26,7 +27,8 @@ def get_env(key: str, default: str = "") -> str:
 AUTOMATR_HOST = get_env("AUTOMATR_HOST", "127.0.0.1")
 AUTOMATR_PORT = int(get_env("AUTOMATR_PORT", "8766"))
 
-PROJECT_ROOT = Path(get_env("AUTOMATR_PROJECT_ROOT", str(Path.cwd()))).resolve()
+# IMPORTANT: PROJECT_ROOT must be stable (don't rely on cwd drifting)
+PROJECT_ROOT = Path(get_env("AUTOMATR_PROJECT_ROOT", str(Path(__file__).resolve().parent))).resolve()
 DATA_DIR = Path(get_env("AUTOMATR_DATA_DIR", str(PROJECT_ROOT / "data"))).resolve()
 DB_PATH = Path(get_env("AUTOMATR_DB_PATH", str(DATA_DIR / "automatr.db"))).resolve()
 
@@ -54,6 +56,10 @@ QUEUE_DIR = get_env("AUTOMATR_QUEUE_DIR", "/automatr/queue")
 # CORS
 CORS_ORIGINS = get_env("AUTOMATR_CORS_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
 
+# Host notifications
+HOST_NOTIFY_BIN = get_env("AUTOMATR_HOST_NOTIFY_BIN", "notify-send")
+HOST_NOTIFY_POLL = float(get_env("AUTOMATR_HOST_NOTIFY_POLL", "0.2"))
+
 
 # Ensure base dirs
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -78,17 +84,19 @@ def allocate_port() -> int:
 
 # ---------- canonical host paths ----------
 def container_mount_root(name: str) -> Path:
-    # data/<name>/ is the mount root
     return DATA_DIR / name
 
 
 def container_dir(name: str) -> Path:
-    # same as mount root (host side)
     return container_mount_root(name)
 
 
 def queue_dir(name: str) -> Path:
     return container_dir(name) / "queue"
+
+
+def notify_queue_dir(name: str) -> Path:
+    return container_dir(name) / "notify.queue"
 
 
 def run_lock(name: str) -> Path:
@@ -106,6 +114,7 @@ def ensure_container_fs(name: str) -> None:
     (root / "queue").mkdir(parents=True, exist_ok=True)
     (root / "pid").mkdir(parents=True, exist_ok=True)
     (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "notify.queue").mkdir(parents=True, exist_ok=True)
 
 
 def is_container_busy(name: str) -> tuple[bool, Optional[str]]:
@@ -140,10 +149,6 @@ def is_container_running(name: str) -> bool:
 
 
 def docker_exec(container_name: str, argv: list[str], timeout: int = 2) -> tuple[int, str]:
-    """
-    Execute inside container. Return (rc, combined_output).
-    Uses `docker exec` via subprocess (fast, simple, no extra deps).
-    """
     cmd = ["docker", "exec", container_name] + argv
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -188,7 +193,52 @@ def export_automation(container: str, automation: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-app = FastAPI(title="Automatr Host API", version="0.2.0")
+# ---------------- Host notify consumer ----------------
+_NOTIFY_THREAD_STARTED = False
+
+
+def _host_notify(title: str, msg: str) -> None:
+    try:
+        subprocess.run([HOST_NOTIFY_BIN, title, msg], check=False)
+    except Exception:
+        pass
+
+
+def _consume_notify_queue_forever(stop_evt: threading.Event) -> None:
+    # Poll all containers’ notify.queue dirs
+    while not stop_evt.is_set():
+        try:
+            if DATA_DIR.exists():
+                for d in DATA_DIR.iterdir():
+                    if not d.is_dir():
+                        continue
+                    qdir = d / "notify.queue"
+                    if not qdir.exists():
+                        continue
+
+                    # process oldest first for sanity
+                    files = sorted(qdir.glob("*.txt"), key=lambda p: p.stat().st_mtime)
+                    for p in files:
+                        try:
+                            txt = p.read_text(encoding="utf-8", errors="replace").splitlines()
+                            title = (txt[0].strip() if len(txt) >= 1 and txt[0].strip() else "AUTOMATR")
+                            msg = ""
+                            if len(txt) >= 2:
+                                msg = "\n".join(txt[1:]).strip()
+                            _host_notify(title, msg)
+                        finally:
+                            # always delete so it doesn't spam forever
+                            try:
+                                p.unlink()
+                            except FileNotFoundError:
+                                pass
+        except Exception:
+            pass
+
+        time.sleep(HOST_NOTIFY_POLL)
+
+
+app = FastAPI(title="Automatr Host API", version="0.2.1")
 
 origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
@@ -198,6 +248,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_notify_stop = threading.Event()
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    global _NOTIFY_THREAD_STARTED
+    if not _NOTIFY_THREAD_STARTED:
+        t = threading.Thread(target=_consume_notify_queue_forever, args=(_notify_stop,), daemon=True)
+        t.start()
+        _NOTIFY_THREAD_STARTED = True
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    _notify_stop.set()
 
 
 @app.get("/health")
@@ -240,13 +306,11 @@ def create_container(payload: dict):
     db.create_container(name, desc)
     ensure_container_fs(name)
 
-    # Untracked metadata.json: bin/containers/<name>/metadata.json
     meta = BIN_CONTAINERS_DIR / name / "metadata.json"
     meta.parent.mkdir(parents=True, exist_ok=True)
     if not meta.exists():
         meta.write_text(
-            json.dumps({"name": name, "created_at": datetime.utcnow().isoformat() + "Z"}, indent=2)
-            + "\n",
+            json.dumps({"name": name, "created_at": datetime.utcnow().isoformat() + "Z"}, indent=2) + "\n",
             encoding="utf-8",
         )
 
@@ -333,12 +397,6 @@ def container_vnc_url(name: str):
 # ---------------- STOP latch + hard stop ----------------
 @app.post("/containers/{name}/stop_auto")
 def stop_auto(name: str):
-    """
-    Immediate stop:
-    - touch STOP latch (so wrappers stop)
-    - attempt docker exec kill if run.lock has pid
-    - clear run.lock (UI shows idle)
-    """
     if not db.container_exists(name):
         return {"ok": False, "error": "not_found"}
 
@@ -382,12 +440,8 @@ def list_automations():
 
 @app.post("/automations/save")
 def save_automation(payload: dict):
-    """
-    Save full automation graph to DB, then export to a specific container.
-    """
     name = (payload.get("name") or "").strip()
     container = (payload.get("container") or "").strip()
-    description = (payload.get("description") or "").strip()
 
     if not name:
         return {"ok": False, "error": "name_required"}
@@ -397,7 +451,7 @@ def save_automation(payload: dict):
         return {"ok": False, "error": "container_not_found"}
 
     try:
-        db.save_automation_graph(payload)  # atomic write; renumber enforced inside db layer
+        db.save_automation_graph(payload)
     except Exception as e:
         return {"ok": False, "error": f"db_save_failed: {e}"}
 
@@ -410,12 +464,6 @@ def save_automation(payload: dict):
 
 @app.post("/containers/{name}/run")
 def run_automation(name: str, payload: dict):
-    """
-    Run:
-    - clear STOP latch
-    - export first (must succeed)
-    - write queue job content: "<automation>\\n"
-    """
     automation = (payload.get("automation") or payload.get("automation_name") or "").strip()
 
     if not automation:
@@ -438,8 +486,6 @@ def run_automation(name: str, payload: dict):
 
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
     job = queue_dir(name) / f"job-{automation}-{ts}.job"
-
-    # IMPORTANT: job content is ONLY the automation name (runner expects this)
     job.write_text(f"{automation}\n", encoding="utf-8")
 
     return {"ok": True, "queued": True}

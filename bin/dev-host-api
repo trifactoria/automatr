@@ -10,5 +10,61 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-exec python3 -m uvicorn app:app --host "${AUTOMATR_HOST:-127.0.0.1}" --port "${AUTOMATR_PORT:-8766}" --reload
+HOST="${AUTOMATR_HOST:-127.0.0.1}"
+PORT="${AUTOMATR_PORT:-8766}"
 
+# Default: NO reload (exports touch generated files and can cause restarts).
+# Opt-in via AUTOMATR_DEV_RELOAD=1
+RELOAD="${AUTOMATR_DEV_RELOAD:-0}"
+
+# ---------- Prosody (optional) ----------
+AUTOMATR_PROSODY_ENABLED="${AUTOMATR_PROSODY_ENABLED:-0}"
+AUTOMATR_PROSODY_NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
+AUTOMATR_PROSODY_IMAGE="${AUTOMATR_PROSODY_IMAGE:-prosody/prosody:latest}"
+AUTOMATR_PROSODY_PORT="${AUTOMATR_PROSODY_PORT:-5222}"          # XMPP client port
+AUTOMATR_PROSODY_HTTP_PORT="${AUTOMATR_PROSODY_HTTP_PORT:-5280}" # optional HTTP/admin
+AUTOMATR_PROSODY_STOP_ON_EXIT="${AUTOMATR_PROSODY_STOP_ON_EXIT:-0}"
+
+ensure_prosody() {
+  [[ "$AUTOMATR_PROSODY_ENABLED" == "1" ]] || return 0
+
+  # already running?
+  if docker ps --format '{{.Names}}' | grep -qx "$AUTOMATR_PROSODY_NAME"; then
+    return 0
+  fi
+
+  # exists but stopped?
+  if docker ps -a --format '{{.Names}}' | grep -qx "$AUTOMATR_PROSODY_NAME"; then
+    docker start "$AUTOMATR_PROSODY_NAME" >/dev/null
+    return 0
+  fi
+
+  # create new (persist state in a named volume)
+  docker run -d \
+    --name "$AUTOMATR_PROSODY_NAME" \
+    -p "${AUTOMATR_PROSODY_PORT}:5222" \
+    -p "${AUTOMATR_PROSODY_HTTP_PORT}:5280" \
+    -v automatr-prosody-data:/var/lib/prosody \
+    "$AUTOMATR_PROSODY_IMAGE" >/dev/null
+}
+
+cleanup() {
+  if [[ "$AUTOMATR_PROSODY_ENABLED" == "1" && "$AUTOMATR_PROSODY_STOP_ON_EXIT" == "1" ]]; then
+    docker stop "$AUTOMATR_PROSODY_NAME" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+ensure_prosody
+
+ARGS=(app:app --host "$HOST" --port "$PORT")
+
+if [[ "$RELOAD" == "1" ]]; then
+  # Watch only backend source areas (NOT generated scripts or data mounts).
+  ARGS+=(--reload)
+  ARGS+=(--reload-dir "./")
+  ARGS+=(--reload-exclude "bin/containers/*")
+  ARGS+=(--reload-exclude "data/*")
+fi
+
+exec python3 -m uvicorn "${ARGS[@]}"
