@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
+NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
+
+if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+  echo "[prosody-down] stopping: $NAME"
+  docker stop "$NAME" >/dev/null
+  exit 0
+fi
+
+echo "[prosody-down] not running"

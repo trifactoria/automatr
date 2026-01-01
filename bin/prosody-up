@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Load env if present
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
+NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
+IMAGE="${AUTOMATR_PROSODY_IMAGE:-prosody/prosody:latest}"
+PORT="${AUTOMATR_PROSODY_PORT:-5222}"
+HTTP_PORT="${AUTOMATR_PROSODY_HTTP_PORT:-5280}"
+
+# Already running?
+if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+  echo "[prosody-up] already running: $NAME"
+  exit 0
+fi
+
+# Exists but stopped?
+if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
+  echo "[prosody-up] starting existing container: $NAME"
+  docker start "$NAME" >/dev/null
+  exit 0
+fi
+
+echo "[prosody-up] creating new container: $NAME"
+
+docker run -d \
+  --name "$NAME" \
+  -p "${PORT}:5222" \
+  -p "${HTTP_PORT}:5280" \
+  -v automatr-prosody-data:/var/lib/prosody \
+  "$IMAGE" >/dev/null
+
+echo "[prosody-up] started"

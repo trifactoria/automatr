@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+watch -n 0.2 --no-title '
+echo "=== time: $(date) ==="
+echo "--- STOP latch ---"
+ls -lah data/tests/STOP 2>/dev/null || echo "STOP: (none)"
+echo
+echo "--- run.lock ---"
+ls -lah data/tests/run.lock 2>/dev/null || echo "run.lock: (none)"
+( [ -f data/tests/run.lock ] && cat data/tests/run.lock ) 2>/dev/null || true
+echo
+echo "--- queue ---"
+ls -lah data/tests/queue 2>/dev/null | tail -n +1
+echo
+echo "--- last 40 lines of runner log (if present) ---"
+ls -1t data/tests/logs/*.log 2>/dev/null | head -n 1 | xargs -r tail -n 40
+'
