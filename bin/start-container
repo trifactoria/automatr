@@ -1,3 +1,23 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+# Usage:
+#   start-container [NAME] [IMAGE]
+# NAME default: img-YYYYMMDD-HHMMSS (avoids collisions)
+# IMAGE default: $AUTOMATR_RUNTIME_IMAGE or automatr-runtime:dev
+
+NAME="${1:-img-$(date +%Y%m%d-%H%M%S)}"
+IMAGE="${2:-${AUTOMATR_RUNTIME_IMAGE:-automatr-runtime:dev}}"
+
 SEQ_GID="$(stat -c %g /dev/snd/seq)"
-docker run --rm -it   --network host   --device /dev/snd/seq   --group-add "$SEQ_GID"   -e AUTOMATR_NODE=img1   -v "$PWD/data/containers/img1:/automatr"   automatr-runtime:dev bash
+
+# mount root per your contract
+mkdir -p "$PWD/data/$NAME"
+
+docker run --rm -it \
+  --network host \
+  --device /dev/snd/seq \
+  --group-add "$SEQ_GID" \
+  -e "AUTOMATR_NODE=$NAME" \
+  -v "$PWD/data/$NAME:/automatr" \
+  "$IMAGE" bash
