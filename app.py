@@ -1,3 +1,5 @@
+# app.py
+
 from __future__ import annotations
 
 import json
@@ -9,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import docker
-from docker.errors import NotFound, APIError
+from docker.errors import APIError, NotFound
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -30,7 +32,6 @@ DB_PATH = Path(get_env("AUTOMATR_DB_PATH", str(DATA_DIR / "automatr.db"))).resol
 
 BIN_DIR = PROJECT_ROOT / "bin"
 EXPORT_PY = Path(get_env("AUTOMATR_EXPORT_PY", str(BIN_DIR / "export.py"))).resolve()
-
 BIN_CONTAINERS_DIR = Path(get_env("AUTOMATR_BIN_CONTAINERS_DIR", str(BIN_DIR / "containers"))).resolve()
 
 # Docker
@@ -53,15 +54,17 @@ QUEUE_DIR = get_env("AUTOMATR_QUEUE_DIR", "/automatr/queue")
 # CORS
 CORS_ORIGINS = get_env("AUTOMATR_CORS_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
 
+
 # Ensure base dirs
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 BIN_CONTAINERS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Ensure DB
+# Ensure DB exists/initialized (db.py uses env AUTOMATR_DB_PATH)
 db.init_db()
 
 docker_client = docker.from_env()
 
+# Runtime registry: db container name -> {container_id, container_name, novnc_port}
 _RUNTIME: dict[str, dict] = {}
 _NEXT_PORT = NOVNC_PORT_BASE
 
@@ -73,7 +76,9 @@ def allocate_port() -> int:
     return p
 
 
+# ---------- canonical host paths ----------
 def container_mount_root(name: str) -> Path:
+    # data/<name>/ is the mount root
     return DATA_DIR / name
 
 
@@ -114,6 +119,10 @@ def is_container_busy(name: str) -> tuple[bool, Optional[str]]:
         return True, None
 
 
+def docker_name(name: str) -> str:
+    return f"automatr-{name}"
+
+
 def is_container_running(name: str) -> bool:
     if name not in _RUNTIME:
         return False
@@ -130,14 +139,10 @@ def is_container_running(name: str) -> bool:
         return False
 
 
-def docker_name(name: str) -> str:
-    return f"automatr-{name}"
-
-
 def docker_exec(container_name: str, argv: list[str], timeout: int = 2) -> tuple[int, str]:
     """
     Execute inside container. Return (rc, combined_output).
-    Uses `docker exec` via subprocess to avoid extra python packages/edge cases.
+    Uses `docker exec` via subprocess (fast, simple, no extra deps).
     """
     cmd = ["docker", "exec", container_name] + argv
     try:
@@ -155,16 +160,16 @@ def clear_stop(name: str) -> None:
 
 
 def set_stop(name: str) -> None:
-    # latch STOP until cleared by run/save or explicit endpoint
-    sf = stop_file(name)
-    sf.write_text("", encoding="utf-8")
+    stop_file(name).write_text("", encoding="utf-8")
 
 
 def export_automation(container: str, automation: str) -> tuple[bool, str]:
     """
-    Calls bin/export.py <container> <automation>.
-    Returns (ok, error_text_or_stdout).
+    Calls: bin/export.py <container> <automation>
     """
+    if not EXPORT_PY.exists():
+        return False, f"export.py not found at {EXPORT_PY}"
+
     env = os.environ.copy()
     env["AUTOMATR_PROJECT_ROOT"] = str(PROJECT_ROOT)
     env["AUTOMATR_DATA_DIR"] = str(DATA_DIR)
@@ -235,11 +240,15 @@ def create_container(payload: dict):
     db.create_container(name, desc)
     ensure_container_fs(name)
 
-    # create metadata.json (untracked) if you want it early
+    # Untracked metadata.json: bin/containers/<name>/metadata.json
     meta = BIN_CONTAINERS_DIR / name / "metadata.json"
     meta.parent.mkdir(parents=True, exist_ok=True)
     if not meta.exists():
-        meta.write_text(json.dumps({"name": name, "created_at": datetime.utcnow().isoformat() + "Z"}, indent=2), encoding="utf-8")
+        meta.write_text(
+            json.dumps({"name": name, "created_at": datetime.utcnow().isoformat() + "Z"}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
 
     return {"ok": True}
 
@@ -281,7 +290,6 @@ def start_container(name: str):
             run_kwargs["network"] = DOCKER_NETWORK
 
         container = docker_client.containers.run(**run_kwargs)
-
         _RUNTIME[name] = {"container_id": container.id, "container_name": cname, "novnc_port": novnc_port}
         return {"ok": True}
     except APIError as e:
@@ -322,14 +330,14 @@ def container_vnc_url(name: str):
     return {"url": url, "view_only": True}
 
 
-# ---------------- Stop latch + hard stop ----------------
+# ---------------- STOP latch + hard stop ----------------
 @app.post("/containers/{name}/stop_auto")
 def stop_auto(name: str):
     """
     Immediate stop:
     - touch STOP latch (so wrappers stop)
     - attempt docker exec kill if run.lock has pid
-    - clear run.lock
+    - clear run.lock (UI shows idle)
     """
     if not db.container_exists(name):
         return {"ok": False, "error": "not_found"}
@@ -337,14 +345,13 @@ def stop_auto(name: str):
     ensure_container_fs(name)
     set_stop(name)
 
-    # Try hard-kill if container running and we can resolve pid
     if is_container_running(name):
         cname = docker_name(name)
         pid: Optional[int] = None
         try:
             if run_lock(name).exists():
                 d = json.loads(run_lock(name).read_text(encoding="utf-8"))
-                if "pid" in d:
+                if "pid" in d and d["pid"] is not None:
                     pid = int(d["pid"])
         except Exception:
             pid = None
@@ -353,7 +360,6 @@ def stop_auto(name: str):
             docker_exec(cname, ["kill", "-TERM", str(pid)], timeout=1)
             docker_exec(cname, ["kill", "-KILL", str(pid)], timeout=1)
 
-    # Clear lock so UI shows idle
     if run_lock(name).exists():
         run_lock(name).unlink()
 
@@ -371,20 +377,13 @@ def clear_stop_endpoint(name: str):
 # ---------------- Automations (DB-backed) ----------------
 @app.get("/automations")
 def list_automations():
-    # You’ll update db.py to match your schema; this assumes it returns name/description/updated_at
     return db.list_automations()
 
 
 @app.post("/automations/save")
 def save_automation(payload: dict):
     """
-    Payload should include everything needed to write:
-    - automations row
-    - automation_vars
-    - automation_steps
-    - step_params
-    - step_clauses
-    Then export for a target container.
+    Save full automation graph to DB, then export to a specific container.
     """
     name = (payload.get("name") or "").strip()
     container = (payload.get("container") or "").strip()
@@ -397,10 +396,8 @@ def save_automation(payload: dict):
     if not db.container_exists(container):
         return {"ok": False, "error": "container_not_found"}
 
-    # db.save_automation_graph should be your atomic “write everything” call.
-    # It should also renumber steps + clauses.
     try:
-        db.save_automation_graph(payload)  # <-- you’ll implement in db.py
+        db.save_automation_graph(payload)  # atomic write; renumber enforced inside db layer
     except Exception as e:
         return {"ok": False, "error": f"db_save_failed: {e}"}
 
@@ -408,7 +405,7 @@ def save_automation(payload: dict):
     if not ok:
         return {"ok": False, "error": "export_failed", "detail": out}
 
-    return {"ok": True}
+    return {"ok": True, "exported": True}
 
 
 @app.post("/containers/{name}/run")
@@ -416,10 +413,11 @@ def run_automation(name: str, payload: dict):
     """
     Run:
     - clear STOP latch
-    - save+export first (or at least export)
-    - create queue job: "RUN <automation>"
+    - export first (must succeed)
+    - write queue job content: "<automation>\\n"
     """
-    automation = (payload.get("automation") or "").strip()
+    automation = (payload.get("automation") or payload.get("automation_name") or "").strip()
+
     if not automation:
         return {"ok": False, "error": "automation_required"}
     if not db.container_exists(name):
@@ -434,14 +432,14 @@ def run_automation(name: str, payload: dict):
     ensure_container_fs(name)
     clear_stop(name)
 
-    # Export must succeed before running
     ok, out = export_automation(name, automation)
     if not ok:
         return {"ok": False, "error": "export_failed", "detail": out}
 
-    # Write queue job
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
-    job = queue_dir(name) / f"job-{ts}.job"
-    job.write_text(f"RUN {automation}\n", encoding="utf-8")
+    job = queue_dir(name) / f"job-{automation}-{ts}.job"
+
+    # IMPORTANT: job content is ONLY the automation name (runner expects this)
+    job.write_text(f"{automation}\n", encoding="utf-8")
 
     return {"ok": True, "queued": True}

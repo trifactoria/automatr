@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# bin/export.py
+
 from __future__ import annotations
 
 import os
@@ -8,22 +10,25 @@ import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
+
 
 DEFAULT_DB_PATH = Path(os.environ.get("AUTOMATR_DB_PATH", "./data/automatr.db")).resolve()
-PROJECT_ROOT = Path(os.environ.get("AUTOMATR_PROJECT_ROOT", Path.cwd())).resolve()
+PROJECT_ROOT = Path(os.environ.get("AUTOMATR_PROJECT_ROOT", str(Path.cwd()))).resolve()
 
+# Tracked wrapper (host)
 BIN_ACTIONS = (PROJECT_ROOT / "bin" / "automatr_actions.py").resolve()
-BIN_CONTAINERS_DIR = (PROJECT_ROOT / "bin" / "containers").resolve()
-DATA_DIR = Path(os.environ.get("AUTOMATR_DATA_DIR", (PROJECT_ROOT / "data"))).resolve()
 
-# Container sees /automatr as mount root
-CONTAINER_MOUNT_ROOT = Path("/automatr")
+# Untracked durable scripts (host)
+BIN_CONTAINERS_DIR = (PROJECT_ROOT / "bin" / "containers").resolve()
+
+# Untracked container mounts (host)
+DATA_DIR = Path(os.environ.get("AUTOMATR_DATA_DIR", str(PROJECT_ROOT / "data"))).resolve()
 
 
 def die(msg: str) -> None:
     print(f"[export] ERROR: {msg}", file=sys.stderr)
-    sys.exit(1)
+    raise SystemExit(1)
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -57,7 +62,6 @@ def literal_py(typ: str, value: str) -> str:
         return str(float(value))
     if typ == "bool":
         return bool_literal(value)
-    # str
     return repr("" if value is None else str(value))
 
 
@@ -122,7 +126,6 @@ def load_steps(conn: sqlite3.Connection, automation: str) -> list[sqlite3.Row]:
     if not rows:
         die(f'no steps found for automation "{automation}"')
 
-    # Require contiguous 1..N (your save guarantees it; export enforces it)
     expected = 1
     for r in rows:
         if int(r["step_num"]) != expected:
@@ -156,19 +159,16 @@ def load_clauses(conn: sqlite3.Connection, step_id: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def expr_term(kind: str, typ: str, value: Optional[str], varmap: dict[str, VarDef]) -> str:
-    # kind in ('buffer','var','literal')
+def expr_term(kind: str, typ: str, value: Optional[str], varmap_by_py: dict[str, VarDef]) -> str:
     if kind == "buffer":
-        # buffer is always a string at source; cast happens in predicate builder
         return "aa.get_buffer()"
     if kind == "var":
         if not value:
             die("clause var reference missing lhs_value/rhs_value")
         py = snake_case(value)
-        if py not in varmap:
+        if py not in varmap_by_py:
             die(f'clause references var "{value}" (sanitized "{py}") not found in automation_vars')
         return py
-    # literal
     return literal_py(typ, value or "")
 
 
@@ -178,13 +178,14 @@ def cast_expr(typ: str, expr: str) -> str:
     if typ == "float":
         return f"float({expr})"
     if typ == "bool":
-        # bool handling for buffer/literal strings
         return f"(({expr}).strip().lower() in ('1','true','yes','y','on'))"
     return f"str({expr})"
 
 
-def predicate_expr(row: sqlite3.Row, varmap: dict[str, VarDef]) -> str:
-    # else head has no predicate
+def predicate_expr(row: sqlite3.Row, varmap_by_py: dict[str, VarDef]) -> str:
+    if row["head"] == "else":
+        return "True"
+
     lhs_kind = row["lhs_kind"]
     rhs_kind = row["rhs_kind"]
     op = row["op"]
@@ -193,14 +194,11 @@ def predicate_expr(row: sqlite3.Row, varmap: dict[str, VarDef]) -> str:
     lhs_val = row["lhs_value"]
     rhs_val = row["rhs_value"]
 
-    if row["head"] == "else":
-        return "True"
-
     if not (lhs_kind and rhs_kind and op and lhs_type and rhs_type):
         die("clause predicate fields incomplete for if/elif")
 
-    lhs_raw = expr_term(lhs_kind, lhs_type, lhs_val, varmap)
-    rhs_raw = expr_term(rhs_kind, rhs_type, rhs_val, varmap)
+    lhs_raw = expr_term(lhs_kind, lhs_type, lhs_val, varmap_by_py)
+    rhs_raw = expr_term(rhs_kind, rhs_type, rhs_val, varmap_by_py)
 
     lhs = cast_expr(lhs_type, lhs_raw)
     rhs = cast_expr(rhs_type, rhs_raw)
@@ -214,15 +212,16 @@ def predicate_expr(row: sqlite3.Row, varmap: dict[str, VarDef]) -> str:
     if op == "endswith":
         return f"({lhs}.endswith({rhs}))"
     if op == "regex":
-        # rhs treated as pattern
         return f"(re.search({rhs}, {lhs}) is not None)"
 
     die(f"unsupported operator: {op}")
     return "False"
 
 
-def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite3.Row], conn: sqlite3.Connection) -> str:
-    varmap = {v.py_name: v for v in vars_}
+def compile_script_text(
+    automation: str, vars_: list[VarDef], steps: list[sqlite3.Row], conn: sqlite3.Connection
+) -> str:
+    varmap_by_py = {v.py_name: v for v in vars_}
 
     lines: list[str] = []
     lines.append("#!/usr/bin/env python3")
@@ -236,7 +235,6 @@ def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite
     lines.append(f"# automation: {automation}")
     lines.append("")
 
-    # Vars as top-level assignments (readable)
     if vars_:
         lines.append("# --- automation vars ---")
         for v in vars_:
@@ -250,7 +248,6 @@ def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite
     lines.append(f"_N_STEPS = {n_steps}")
     lines.append("")
 
-    # Step functions
     for s in steps:
         step_id = int(s["id"])
         step_num = int(s["step_num"])
@@ -273,19 +270,18 @@ def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite
             lines.append("")
             continue
 
-        # action call
+        # action
         if params:
             kwargs = ", ".join([f"{k}={v}" for k, v in params.items()])
             lines.append(f"    aa.{action}({kwargs})")
         else:
             lines.append(f"    aa.{action}()")
 
-        # clauses
         if clauses:
             lines.append("    # clauses")
             for idx, c in enumerate(clauses):
                 head = c["head"]
-                pred = predicate_expr(c, varmap)
+                pred = predicate_expr(c, varmap_by_py)
 
                 if idx == 0:
                     lines.append(f"    if {pred}:")
@@ -295,7 +291,6 @@ def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite
                     elif head == "else":
                         lines.append("    else:")
                     else:
-                        # head=='if' after first is not valid in a chain
                         die("clause chain invalid: 'if' after first clause; use elif/else ordering")
 
                 action_kind = c["action"]
@@ -337,7 +332,6 @@ def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite
         lines.append("    return None")
         lines.append("")
 
-    # Main runner loop (program counter)
     lines.append("def main() -> int:")
     lines.append("    pc = 1")
     lines.append("    while 1 <= pc <= _N_STEPS:")
@@ -362,6 +356,7 @@ def compile_script_text(automation: str, vars_: list[VarDef], steps: list[sqlite
 
 
 def main(argv: list[str]) -> int:
+    # Required CLI: bin/export.py <container> <automation>
     if len(argv) != 3:
         print("usage: bin/export.py <container> <automation>", file=sys.stderr)
         return 2
@@ -374,15 +369,24 @@ def main(argv: list[str]) -> int:
     if not DEFAULT_DB_PATH.exists():
         die(f"db not found: {DEFAULT_DB_PATH}")
 
-    # Paths
+    if not BIN_ACTIONS.exists():
+        die(f"missing tracked wrapper: {BIN_ACTIONS}")
+
+    # Durable host target (untracked)
     durable_dir = BIN_CONTAINERS_DIR / container / "bin" / "automations"
     durable_py = durable_dir / f"{automation}.py"
 
+    # Runtime mount root (untracked)
     mount_root = DATA_DIR / container
     mount_bin = mount_root / "bin"
-    runtime_link = mount_bin / automation
-    runtime_actions = mount_bin / "automatr_actions.py"
 
+    # Canonical runtime links:
+    # data/<container>/bin/automatr_actions.py -> bin/automatr_actions.py
+    # data/<container>/bin/<automation> -> bin/containers/<container>/bin/automations/<automation>.py
+    runtime_actions = mount_bin / "automatr_actions.py"
+    runtime_link = mount_bin / automation
+
+    # Ensure container dirs exist
     ensure_dir(durable_dir)
     ensure_dir(mount_root)
     ensure_dir(mount_bin)
@@ -391,11 +395,7 @@ def main(argv: list[str]) -> int:
     ensure_dir(mount_root / "pid")
     ensure_dir(mount_root / "config")
 
-    if not BIN_ACTIONS.exists():
-        die(f"missing tracked wrapper: {BIN_ACTIONS}")
-
     with connect(DEFAULT_DB_PATH) as conn:
-        # Ensure automation exists
         row = conn.execute("SELECT name FROM automations WHERE name=?", (automation,)).fetchone()
         if not row:
             die(f'automation not found: "{automation}"')
@@ -407,7 +407,6 @@ def main(argv: list[str]) -> int:
     durable_py.write_text(script, encoding="utf-8")
     chmod_exec(durable_py)
 
-    # Install symlinks into container mount
     ensure_symlink(runtime_actions, BIN_ACTIONS)
     ensure_symlink(runtime_link, durable_py)
 
