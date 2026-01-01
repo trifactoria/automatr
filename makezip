@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 IGNORE_LIST=(
+'config/*'
 '*/.next/*'
 '*/node_modules/*'
 '.git/*'
@@ -7,6 +8,8 @@ IGNORE_LIST=(
 'src/app/favicon*'
 '*pycache*'
 '*.zip'
+'data/*'
+'bin/containers/*'
 )
 
 ZIP_FILE="automatr.zip"

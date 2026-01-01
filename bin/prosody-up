@@ -1,41 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Load env if present
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+NAME="automatr-prosody"
+IMAGE="prosody/prosody:latest"
+DOMAIN="${AUTOMATR_XMPP_DOMAIN:-automatr-xmpp.local}"
+CFG="$(pwd)/config/prosody/prosody.cfg.lua"
+VOL="automatr-prosody-data"
 
-if [[ -f .env ]]; then
-  set -a
-  source .env
-  set +a
+# Optional: put Prosody on same network as runtime containers
+NET="${DOCKER_NETWORK:-}"
+
+if [[ ! -f "$CFG" ]]; then
+  echo "Missing prosody config: $CFG" >&2
+  exit 1
 fi
 
-NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
-IMAGE="${AUTOMATR_PROSODY_IMAGE:-prosody/prosody:latest}"
-PORT="${AUTOMATR_PROSODY_PORT:-5222}"
-HTTP_PORT="${AUTOMATR_PROSODY_HTTP_PORT:-5280}"
-
-# Already running?
+# If it's already running, do nothing
 if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
-  echo "[prosody-up] already running: $NAME"
+  echo "$NAME already running"
   exit 0
 fi
 
-# Exists but stopped?
+# If container exists but is stopped, start it
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
-  echo "[prosody-up] starting existing container: $NAME"
   docker start "$NAME" >/dev/null
+  echo "Started existing $NAME"
   exit 0
 fi
 
-echo "[prosody-up] creating new container: $NAME"
+net_args=()
+if [[ -n "$NET" ]]; then
+  net_args+=(--network "$NET")
+fi
 
 docker run -d \
   --name "$NAME" \
-  -p "${PORT}:5222" \
-  -p "${HTTP_PORT}:5280" \
-  -v automatr-prosody-data:/var/lib/prosody \
-  "$IMAGE" >/dev/null
+  --network automatr-net \
+  -p 5222:5222 \
+  -p 5280:5280 \
+  "${net_args[@]}" \
+  -v "$CFG:/etc/prosody/prosody.cfg.lua:ro" \
+  -v "$VOL:/var/lib/prosody" \
+  "$IMAGE"
 
-echo "[prosody-up] started"
+echo "Prosody is up: $NAME (domain: $DOMAIN)"

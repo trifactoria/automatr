@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
+NAME="automatr-prosody"
+VOL="automatr-prosody-data"
 
-docker stop "$NAME" 2>/dev/null || true
-docker rm "$NAME" 2>/dev/null || true
-docker volume rm automatr-prosody-data 2>/dev/null || true
-
-echo "[prosody-reset] removed container + volume"
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker volume rm "$VOL" >/dev/null 2>&1 || true
+echo "Reset: removed $NAME and volume $VOL"

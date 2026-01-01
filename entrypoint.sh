@@ -144,16 +144,24 @@ else
   RTPMIDI_PID=""
 fi
 
-# --- Start runner (non-fatal to desktop) ---
+# --- Start automation runner ---
 log "Starting automation runner..."
 (
   exec "${PY_BIN}" /usr/local/bin/runner.py
 ) || log "ERROR: runner.py exited" &
 RUNNER_PID=$!
 
+# --- Start agent XMPP bot ---
+log "Starting agent XMPP bot..."
+(
+  exec "${PY_BIN}" /usr/local/bin/agent_bot.py
+) || log "ERROR: agent_bot.py exited" &
+AGENT_PID=$!
+
 cleanup() {
   log "Shutting down services..."
   kill \
+    "${AGENT_PID}" \
     "${RUNNER_PID}" \
     "${RTPMIDI_PID}" \
     "${NOVNC_PID}" \

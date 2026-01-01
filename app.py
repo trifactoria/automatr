@@ -65,6 +65,14 @@ HOST_NOTIFY_POLL = float(get_env("AUTOMATR_HOST_NOTIFY_POLL", "0.2"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 BIN_CONTAINERS_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---------- XMPP (agent bots) ----------
+XMPP_DOMAIN = get_env("AUTOMATR_XMPP_DOMAIN", "automatr-xmpp.local")
+XMPP_HOST = get_env("AUTOMATR_XMPP_HOST", "automatr-prosody")
+XMPP_PORT = get_env("AUTOMATR_XMPP_PORT", "5222")
+XMPP_MUC = get_env("AUTOMATR_XMPP_MUC", f"automatr@conference.{XMPP_DOMAIN}")
+XMPP_PASSWORD = get_env("AUTOMATR_XMPP_PASSWORD", "supersecret")
+
+
 # Ensure DB exists/initialized (db.py uses env AUTOMATR_DB_PATH)
 db.init_db()
 
@@ -336,8 +344,16 @@ def start_container(name: str):
             "AUTOMATR_SCREEN_H": SCREEN_H,
             "AUTOMATR_SCREEN_D": SCREEN_D,
             "DISPLAY": ":99",
-        }
 
+            # agent bot identity + xmpp routing
+            "AUTOMATR_NODE": name,
+            "AUTOMATR_XMPP_DOMAIN": XMPP_DOMAIN,
+            "AUTOMATR_XMPP_HOST": XMPP_HOST,
+            "AUTOMATR_XMPP_PORT": str(XMPP_PORT),
+            "AUTOMATR_XMPP_MUC": XMPP_MUC,
+            "AUTOMATR_XMPP_PASSWORD": XMPP_PASSWORD,
+        }
+        
         volumes = {str(container_dir(name)): {"bind": CONTAINER_ROOT, "mode": "rw"}}
         ports = {"6080/tcp": novnc_port}
 
