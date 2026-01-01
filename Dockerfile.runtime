@@ -79,6 +79,7 @@ COPY runner.py /usr/local/bin/runner.py
 COPY bin/agent_bot.py /usr/local/bin/agent_bot.py
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/runner.py /usr/local/bin/entrypoint.sh /usr/local/bin/agent_bot.py
+RUN sed -i 's/^hosts:.*/hosts:          files dns/' /etc/nsswitch.conf
 
 USER root
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

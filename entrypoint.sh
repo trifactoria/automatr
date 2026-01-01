@@ -13,6 +13,12 @@ set -euo pipefail
 : "${AUTOMATR_ENABLE_RTPMIDI:=0}"
 : "${AUTOMATR_RTPMIDI_SOCK:=/run/rtpmidid/control.sock}"
 
+# Required for bot
+: "${AUTOMATR_XMPP_PASSWORD:?AUTOMATR_XMPP_PASSWORD is required}"
+: "${AUTOMATR_XMPP_HOST:?AUTOMATR_XMPP_HOST is required}"
+: "${AUTOMATR_XMPP_DOMAIN:?AUTOMATR_XMPP_DOMAIN is required}"
+
+
 log() { echo "[entrypoint] $*"; }
 
 # If running as root, ensure runtime dirs and fix /automatr perms on bind mount
