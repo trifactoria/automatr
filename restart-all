@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 
+cd /home/andy/projects/automatr/
 # Kill containers
+notify-send "Killing containers"
 echo "Killing containers..."
 docker rm -f automatr-prosody
 docker rm -f automatr-tests
 docker network rm automatr-net
 # rebuild docker image
+notify-send "Rebuilding dockers"
 echo "Rebuilding docker container..."
 ./bin/build
 # bring net back up
+notify-send "Starting network"
 echo "Starting automatr-net..."
 docker network create automatr-net
 # bring prosody back up
+notify-send "Starting prosody"
 echo "Starting prosody..."
 echo "Run docker logs -f automatr-prosody in a new term to watch logs..."
 ./bin/prosody-up
 # starting automatr-tests
+notify-send "Starting automatr-tests"
 echo "Starting automatr-tests..."
 curl -s -X POST http://127.0.0.1:8766/containers/tests/start | jq
 
+notify-send "Restart complete"
 # End notes
 echo "All containers started and running."
 echo "Check network with..."

@@ -5,9 +5,9 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
-# These mirror your runner conventions (and work even if runner isn't imported).
+# Mirror runner paths
 AUTOMATR_ROOT = Path(os.getenv("AUTOMATR_CONTAINER_ROOT", "/automatr"))
 LOGS_DIR = AUTOMATR_ROOT / "logs"
 RUN_LOCK = AUTOMATR_ROOT / "run.lock"
@@ -16,40 +16,75 @@ STOP_FILE = AUTOMATR_ROOT / "STOP"
 
 @dataclass(frozen=True)
 class BotContext:
-    node: str          # DB/UI name (AUTOMATR_NODE)
-    nick: str          # muc nick (agent-<node>)
-    room: str          # room jid
-    jid: str           # full bound jid
+    node: str
+    nick: str
+    room: str
+    jid: str
 
 
 # -------------------------
-# Utilities
+# Parsing + addressing
 # -------------------------
 
-def _aliases(ctx: BotContext) -> set[str]:
+def aliases(ctx: BotContext) -> set[str]:
     # In MUC, accept "<node>:" or "<nick>:"
     return {ctx.node, ctx.nick}
 
 
-def _parse_addressed(text: str) -> tuple[Optional[str], str]:
+def parse_addressed(text: str) -> Tuple[Optional[str], str]:
     """
-    If message starts with "<target>: <rest>", returns (target, rest).
-    Otherwise returns (None, original).
+    "<target>: <rest>" -> (target, rest)
+    Otherwise -> (None, original)
     """
-    if ":" not in text:
-        return None, text.strip()
-    head, rest = text.split(":", 1)
+    t = (text or "").strip()
+    if ":" not in t:
+        return None, t
+    head, rest = t.split(":", 1)
     target = head.strip()
     rest = rest.strip()
     if not target:
-        return None, text.strip()
+        return None, t
     return target, rest
 
 
-def _tail_file(path: Path, n: int = 80) -> str:
+def extract_backtick_cmd(text: str) -> Optional[str]:
+    """
+    Accept either:
+      `echo test`
+    or
+      ```bash
+      echo test
+      ```
+    """
+    t = (text or "").strip()
+
+    if t.startswith("```") and t.endswith("```"):
+        inner = t[3:-3].strip()
+        lines = inner.splitlines()
+        if not lines:
+            return None
+        # optional language hint line
+        if len(lines) >= 2 and lines[0].strip().isalpha():
+            inner2 = "\n".join(lines[1:]).strip()
+            return inner2 or None
+        return inner or None
+
+    if t.startswith("`") and t.endswith("`") and len(t) >= 2:
+        inner = t[1:-1].strip()
+        return inner or None
+
+    return None
+
+
+def clip(s: str, limit: int = 3500) -> str:
+    if len(s) <= limit:
+        return s
+    return s[-limit:]
+
+
+def tail_file(path: Path, n: int = 80) -> str:
     try:
         with path.open("rb") as f:
-            # Simple tail: read last ~64KB (enough for typical logs) then splitlines.
             f.seek(0, 2)
             size = f.tell()
             f.seek(max(size - 65536, 0), 0)
@@ -62,47 +97,10 @@ def _tail_file(path: Path, n: int = 80) -> str:
         return f"(tail error: {e})"
 
 
-def _clip(s: str, limit: int = 3500) -> str:
-    if len(s) <= limit:
-        return s
-    return s[-limit:]
-
-
-def _extract_backtick_cmd(text: str) -> Optional[str]:
+def run_shell(cmd: str, timeout_s: float = 10.0) -> str:
     """
-    Accept either:
-      `echo test`
-    or triple-backtick blocks:
-      ```bash
-      echo test
-      ```
-    Returns command string or None.
-    """
-    t = text.strip()
-
-    # triple backticks
-    if t.startswith("```") and t.endswith("```"):
-        inner = t[3:-3].strip()
-        # allow optional language hint as first token line
-        lines = inner.splitlines()
-        if not lines:
-            return None
-        if len(lines) >= 2 and lines[0].strip().isalpha():
-            return "\n".join(lines[1:]).strip() or None
-        return inner or None
-
-    # single backticks
-    if t.startswith("`") and t.endswith("`") and len(t) >= 2:
-        inner = t[1:-1].strip()
-        return inner or None
-
-    return None
-
-
-def _run_shell_command(cmd: str, timeout_s: float = 10.0) -> str:
-    """
-    Runs command using /bin/sh -lc so you can use normal shell syntax.
-    Returns combined stdout/stderr.
+    Run via /bin/sh -lc so shell syntax works.
+    Returns combined stdout/stderr, clipped.
     """
     try:
         cp = subprocess.run(
@@ -112,12 +110,10 @@ def _run_shell_command(cmd: str, timeout_s: float = 10.0) -> str:
             timeout=timeout_s,
         )
         out = (cp.stdout or "") + (cp.stderr or "")
-        out = out.strip()
-        if not out:
-            out = "(no output)"
+        out = out.strip() or "(no output)"
         if cp.returncode != 0:
             out = f"(exit {cp.returncode})\n{out}"
-        return _clip(out)
+        return clip(out)
     except subprocess.TimeoutExpired:
         return f"(timeout after {timeout_s}s)"
     except Exception as e:
@@ -125,7 +121,7 @@ def _run_shell_command(cmd: str, timeout_s: float = 10.0) -> str:
 
 
 # -------------------------
-# Commands
+# Command registry
 # -------------------------
 
 CommandFn = Callable[[str, BotContext], str]
@@ -159,7 +155,6 @@ def cmd_clear_stop(_arg: str, _ctx: BotContext) -> str:
 
 
 def cmd_tail(arg: str, _ctx: BotContext) -> str:
-    # tail [n]
     n = 80
     if arg:
         try:
@@ -172,9 +167,9 @@ def cmd_tail(arg: str, _ctx: BotContext) -> str:
         return "no logs yet"
 
     path = files[-1]
-    tail = _tail_file(path, n=n)
-    tail = _clip(tail, 3500)
-    return f"tail {path.name}\n{tail}"
+    out = tail_file(path, n=n)
+    out = clip(out, 3500)
+    return f"tail {path.name}\n{out}"
 
 
 def cmd_exec(arg: str, _ctx: BotContext) -> str:
@@ -184,28 +179,26 @@ def cmd_exec(arg: str, _ctx: BotContext) -> str:
       exec `echo test`
       exec ```bash ... ```
     """
-    arg = (arg or "").strip()
-    if not arg:
+    a = (arg or "").strip()
+    if not a:
         return "usage: exec <command>  (or exec `...`)"
 
-    bt = _extract_backtick_cmd(arg)
-    cmd = bt if bt is not None else arg
-    return _run_shell_command(cmd)
+    bt = extract_backtick_cmd(a)
+    cmd = bt if bt is not None else a
+    return run_shell(cmd)
 
 
-def cmd_help(_arg: str, _ctx: BotContext) -> str:
-    cmds = ", ".join(sorted(COMMANDS.keys()))
+def cmd_help(_arg: str, ctx: BotContext) -> str:
+    cmds = ", ".join(sorted({k for k in COMMANDS.keys() if not k.startswith("_")}))
     return (
-        "commands: "
-        + cmds
-        + "\n"
-        + "groupchat addressing: <name>: <cmd> OR <nick>: <cmd>\n"
-        + "direct message: just send <cmd> (no prefix needed)\n"
-        + "exec examples: exec echo test | exec `echo test`"
+        "commands: " + cmds + "\n"
+        "groupchat: <name>: <cmd> or <nick>: <cmd>\n"
+        "dm: just send <cmd> (no prefix)\n"
+        "exec: exec echo test | exec `echo test` | `echo test`"
     )
 
 
-# Registry: easiest extension path is to add a cmd_* and register it here.
+# Keep this central and simple to extend.
 COMMANDS: dict[str, CommandFn] = {
     "ping": cmd_ping,
     "status": cmd_status,
@@ -218,17 +211,23 @@ COMMANDS: dict[str, CommandFn] = {
 }
 
 
-def _dispatch(cmdline: str, ctx: BotContext) -> str:
+def dispatch(cmdline: str, ctx: BotContext) -> str:
     cmdline = (cmdline or "").strip()
     if not cmdline:
         return "no command"
 
-    # Backticks alone => implicit exec
-    bt = _extract_backtick_cmd(cmdline)
+    # bare backticks => implicit exec
+    bt = extract_backtick_cmd(cmdline)
     if bt is not None:
-        return _run_shell_command(bt)
+        return run_shell(bt)
 
-    parts = shlex.split(cmdline)
+    # parse first word as command
+    try:
+        parts = shlex.split(cmdline)
+    except ValueError:
+        # fallback if quoting is broken
+        parts = cmdline.split()
+
     if not parts:
         return "no command"
 
@@ -238,31 +237,45 @@ def _dispatch(cmdline: str, ctx: BotContext) -> str:
     fn = COMMANDS.get(cmd)
     if not fn:
         return f"unknown cmd: {cmdline} (try: help)"
+
     return fn(arg, ctx)
 
 
 def handle_message(text: str, ctx: BotContext, *, is_direct: bool, is_group: bool) -> Optional[str]:
     """
-    Rules:
-      - In groupchat: ONLY respond if addressed as "<target>: <cmd>"
-        where target is ctx.node or ctx.nick.
-      - In direct chat: accept raw commands (no addressing required).
+    Canonical entry point used by working_bot.py.
+
+    - groupchat: require addressing "<target>: <cmd>" where target is node or nick
+    - direct message: allow raw commands; addressing also ok
     """
-    text = (text or "").strip()
-    if not text:
+    t = (text or "").strip()
+    if not t:
         return None
 
-    target, rest = _parse_addressed(text)
+    target, rest = parse_addressed(t)
 
     if is_group:
         if target is None:
             return None
-        if target not in _aliases(ctx):
+        if target not in aliases(ctx):
             return None
-        return _dispatch(rest, ctx)
+        return dispatch(rest, ctx)
 
-    # DM (or non-group): allow either addressed or raw
-    if target is not None and target in _aliases(ctx):
-        return _dispatch(rest, ctx)
+    # DM: allow addressed or raw
+    if target is not None and target in aliases(ctx):
+        return dispatch(rest, ctx)
 
-    return _dispatch(text, ctx)
+    return dispatch(t, ctx)
+
+
+# ---- Compatibility aliases (so future bot code doesn't break) ----
+
+def try_handle_message(text: str, ctx: BotContext) -> Optional[str]:
+    # Old naming; assume groupchat style unless caller is explicit elsewhere
+    # Kept for compatibility.
+    return handle_message(text, ctx, is_direct=False, is_group=True)
+
+
+def handle(text: str, ctx: BotContext, *, is_direct: bool = False, is_group: bool = True) -> Optional[str]:
+    # Another simple alias.
+    return handle_message(text, ctx, is_direct=is_direct, is_group=is_group)
