@@ -2,24 +2,33 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
-import type { ContainerRow, ContainerDetail, AutomationRow, AutomationGraph, ActionsCheck } from "@/lib/types";
+import * as api from "@/lib/api";
+import type { ContainerSummary, ContainerDetail, AutomationSummary, AutomationGraph } from "@/lib/types";
 
+import { HostDashboard } from "@/components/HostDashboard";
 import { ContainerBar } from "@/components/ContainerBar";
 import { VncPanel } from "@/components/VncPanel";
 import { AutomationPanel } from "@/components/AutomationPanel";
 import { CreateContainerModal } from "@/components/modals/CreateContainerModal";
 import { CreateAutomationModal } from "@/components/modals/CreateAutomationModal";
 
+type ViewMode = "host" | "container";
+
 export default function Page() {
+  // View mode
+  const [viewMode, setViewMode] = useState<ViewMode>("host");
+
   // Data
-  const [containers, setContainers] = useState<ContainerRow[]>([]);
-  const [automations, setAutomations] = useState<AutomationRow[]>([]);
+  const [containers, setContainers] = useState<ContainerSummary[]>([]);
+  const [automations, setAutomations] = useState<AutomationSummary[]>([]);
   const [availableActions, setAvailableActions] = useState<string[]>(["sleep"]);
 
   // Selected container
   const [selectedContainer, setSelectedContainer] = useState<string>("");
   const [containerDetail, setContainerDetail] = useState<ContainerDetail | null>(null);
+
+  // VNC visibility (UI-only toggle)
+  const [vncVisible, setVncVisible] = useState(false);
 
   // Selected automation
   const [selectedAutomation, setSelectedAutomation] = useState<string>("");
@@ -35,9 +44,7 @@ export default function Page() {
 
   // Fetch containers and automations on mount
   useEffect(() => {
-    refreshContainers();
-    refreshAutomations();
-    fetchAvailableActions();
+    refreshData();
   }, []);
 
   // Fetch container detail when selected container changes
@@ -58,9 +65,13 @@ export default function Page() {
     }
   }, [selectedAutomation]);
 
+  async function refreshData() {
+    await Promise.all([refreshContainers(), refreshAutomations(), fetchAvailableActions()]);
+  }
+
   async function refreshContainers() {
     try {
-      const cs = await apiGet<ContainerRow[]>("/containers");
+      const cs = await api.getContainers();
       setContainers(cs);
     } catch (e) {
       console.error("Failed to fetch containers:", e);
@@ -69,7 +80,7 @@ export default function Page() {
 
   async function refreshAutomations() {
     try {
-      const as = await apiGet<AutomationRow[]>("/automations");
+      const as = await api.getAutomations();
       setAutomations(as);
     } catch (e) {
       console.error("Failed to fetch automations:", e);
@@ -78,9 +89,9 @@ export default function Page() {
 
   async function fetchAvailableActions() {
     try {
-      const check = await apiGet<ActionsCheck>("/actions/check");
-      const actions = [...check.wrapper_actions, ...check.db_actions];
-      setAvailableActions(actions.length > 0 ? actions : ["sleep"]);
+      const check = await api.getActionsCheck();
+      // Use wrapper_actions (public actions only)
+      setAvailableActions(check.wrapper_actions.length > 0 ? check.wrapper_actions : ["sleep"]);
     } catch (e) {
       console.error("Failed to fetch actions:", e);
     }
@@ -89,7 +100,7 @@ export default function Page() {
   async function fetchContainerDetail() {
     if (!selectedContainer) return;
     try {
-      const detail = await apiGet<ContainerDetail>(`/containers/${encodeURIComponent(selectedContainer)}`);
+      const detail = await api.getContainerDetail(selectedContainer);
       setContainerDetail(detail);
     } catch (e) {
       console.error("Failed to fetch container detail:", e);
@@ -99,7 +110,7 @@ export default function Page() {
   async function fetchAutomationGraph() {
     if (!selectedAutomation) return;
     try {
-      const graph = await apiGet<AutomationGraph>(`/automations/${encodeURIComponent(selectedAutomation)}/graph`);
+      const graph = await api.getAutomationGraph(selectedAutomation);
       setAutomationGraph(graph);
     } catch (e) {
       console.error("Failed to fetch automation graph:", e);
@@ -108,23 +119,35 @@ export default function Page() {
   }
 
   // Container actions
-  async function handleStartContainer() {
-    if (!selectedContainer) return;
+  async function handleSelectContainer(name: string) {
+    setSelectedContainer(name);
+    setViewMode("container");
+    setVncVisible(false);
+  }
+
+  async function handleStartContainer(name?: string) {
+    const target = name || selectedContainer;
+    if (!target) return;
     try {
-      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/start`);
+      await api.startContainer(target);
       await refreshContainers();
-      await fetchContainerDetail();
+      if (target === selectedContainer) {
+        await fetchContainerDetail();
+      }
     } catch (e) {
       console.error("Failed to start container:", e);
     }
   }
 
-  async function handleStopContainer() {
-    if (!selectedContainer) return;
+  async function handleStopContainer(name?: string) {
+    const target = name || selectedContainer;
+    if (!target) return;
     try {
-      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/stop`);
+      await api.stopContainer(target);
       await refreshContainers();
-      await fetchContainerDetail();
+      if (target === selectedContainer) {
+        await fetchContainerDetail();
+      }
     } catch (e) {
       console.error("Failed to stop container:", e);
     }
@@ -133,7 +156,7 @@ export default function Page() {
   async function handleRestartContainer() {
     if (!selectedContainer) return;
     try {
-      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/restart`);
+      await api.restartContainer(selectedContainer);
       await refreshContainers();
       await fetchContainerDetail();
     } catch (e) {
@@ -144,7 +167,7 @@ export default function Page() {
   async function handleStopAuto() {
     if (!selectedContainer) return;
     try {
-      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/stop_auto`);
+      await api.stopAuto(selectedContainer);
       await refreshContainers();
       await fetchContainerDetail();
     } catch (e) {
@@ -155,7 +178,7 @@ export default function Page() {
   async function handleClearStop() {
     if (!selectedContainer) return;
     try {
-      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/clear_stop`);
+      await api.clearStop(selectedContainer);
       await refreshContainers();
       await fetchContainerDetail();
     } catch (e) {
@@ -165,9 +188,10 @@ export default function Page() {
 
   async function handleCreateContainer(payload: { name: string; description: string }) {
     try {
-      await apiPost("/containers", payload);
+      await api.createContainer(payload);
       await refreshContainers();
       setSelectedContainer(payload.name);
+      setViewMode("container");
     } catch (e) {
       console.error("Failed to create container:", e);
     }
@@ -177,9 +201,7 @@ export default function Page() {
   async function handleRunAutomation() {
     if (!selectedContainer || !selectedAutomation) return;
     try {
-      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/run`, {
-        automation: selectedAutomation,
-      });
+      await api.runAutomation(selectedContainer, selectedAutomation);
       await refreshContainers();
       await fetchContainerDetail();
     } catch (e) {
@@ -192,9 +214,13 @@ export default function Page() {
     setSaving(true);
     setSaveError(null);
     try {
-      await apiPost("/automations/save", {
-        automation: automationGraph,
+      // Save payload must be flat: {name, description, container, vars, steps}
+      await api.saveAutomation({
+        name: automationGraph.name,
+        description: automationGraph.description,
         container: selectedContainer,
+        vars: automationGraph.vars,
+        steps: automationGraph.steps,
       });
       await refreshAutomations();
       await fetchAutomationGraph();
@@ -210,7 +236,7 @@ export default function Page() {
     if (!selectedAutomation) return;
     if (!confirm(`Are you sure you want to delete automation "${selectedAutomation}"?`)) return;
     try {
-      await apiDelete(`/automations/${encodeURIComponent(selectedAutomation)}`);
+      await api.deleteAutomation(selectedAutomation);
       await refreshAutomations();
       setSelectedAutomation("");
       setAutomationGraph(null);
@@ -221,7 +247,19 @@ export default function Page() {
 
   async function handleCreateAutomation(payload: { name: string; description: string; yaml: string }) {
     try {
-      await apiPost("/automations", payload);
+      // Note: CreateAutomationModal still uses yaml but this will be handled by backend
+      // For now we'll use the POST /automations endpoint (backend should handle yaml parsing)
+      // This maintains compatibility with the existing modal while backend handles the conversion
+      // TODO: Update modal to use graph-based creation once backend supports it
+      const response = await fetch(`${api.API_BASE}/automations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to create automation: ${response.statusText}`);
+      }
       await refreshAutomations();
       setSelectedAutomation(payload.name);
     } catch (e) {
@@ -236,66 +274,103 @@ export default function Page() {
         <Image src="/logo.png" alt="Automatr logo" width={32} height={32} className="rounded-xl border" />
         <div className="text-2xl font-bold text-gray-900">Automatr</div>
         <div className="ml-auto text-sm text-gray-600">
-          {selectedContainer ? `Container: ${selectedContainer}` : "Host Dashboard"}
+          {viewMode === "host" ? "Host Dashboard" : `Container: ${selectedContainer}`}
         </div>
+        {viewMode === "container" && (
+          <button
+            onClick={() => {
+              setViewMode("host");
+              setSelectedContainer("");
+              setVncVisible(false);
+            }}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50"
+          >
+            ← Back to Host
+          </button>
+        )}
       </div>
 
-      {/* Container selector bar */}
-      <div className="mb-4">
-        <ContainerBar
-          containers={containers}
-          selectedContainer={selectedContainer}
-          containerDetail={containerDetail}
-          onSelectContainer={setSelectedContainer}
-          onNewContainer={() => setCreateContainerOpen(true)}
-          onStart={handleStartContainer}
-          onStop={handleStopContainer}
-          onRestart={handleRestartContainer}
-          onStopAuto={handleStopAuto}
-          onClearStop={handleClearStop}
-        />
-      </div>
-
-      {/* VNC panel (always present when container selected) */}
-      {selectedContainer && (
-        <div className="mb-4">
-          <VncPanel
-            vncUrl={containerDetail?.vnc_url}
-            running={containerDetail?.running ?? false}
-            onStart={handleStartContainer}
-          />
-        </div>
-      )}
-
-      {/* Automation panel (always present when container selected) */}
-      {selectedContainer && (
-        <div>
-          <AutomationPanel
-            automations={automations}
-            selectedAutomation={selectedAutomation}
-            automationGraph={automationGraph}
-            availableActions={availableActions}
-            containerRunning={containerDetail?.running ?? false}
-            onSelectAutomation={setSelectedAutomation}
-            onNewAutomation={() => setCreateAutomationOpen(true)}
-            onRun={handleRunAutomation}
-            onSave={handleSaveAutomation}
-            onDelete={handleDeleteAutomation}
-            onUpdateGraph={setAutomationGraph}
-            saveError={saveError}
-            saving={saving}
-          />
-        </div>
-      )}
-
-      {/* No container selected state */}
-      {!selectedContainer && (
-        <div className="flex h-[400px] items-center justify-center rounded-2xl border bg-white text-gray-500">
-          <div className="text-center">
-            <div className="mb-2 text-lg font-medium">No container selected</div>
-            <div className="text-sm">Select a container or create a new one to get started</div>
+      {/* Host View */}
+      {viewMode === "host" && (
+        <>
+          <div className="mb-4 flex items-center gap-3 rounded-2xl border bg-white p-4">
+            <button
+              className="rounded-lg border border-blue-600 bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              onClick={() => setCreateContainerOpen(true)}
+            >
+              New Container
+            </button>
           </div>
-        </div>
+          <HostDashboard
+            containers={containers}
+            onStart={handleStartContainer}
+            onStop={handleStopContainer}
+            onViewVnc={handleSelectContainer}
+          />
+        </>
+      )}
+
+      {/* Container View */}
+      {viewMode === "container" && selectedContainer && (
+        <>
+          {/* Container selector bar */}
+          <div className="mb-4">
+            <ContainerBar
+              containers={containers}
+              selectedContainer={selectedContainer}
+              containerDetail={containerDetail}
+              onSelectContainer={handleSelectContainer}
+              onNewContainer={() => setCreateContainerOpen(true)}
+              onStart={() => handleStartContainer()}
+              onStop={() => handleStopContainer()}
+              onRestart={handleRestartContainer}
+              onStopAuto={handleStopAuto}
+              onClearStop={handleClearStop}
+            />
+          </div>
+
+          {/* VNC panel with UI-only show/hide toggle */}
+          <div className="mb-4 rounded-2xl border bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-lg font-semibold text-gray-900">VNC Display</div>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={vncVisible}
+                  onChange={(e) => setVncVisible(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Show VNC</span>
+              </label>
+            </div>
+            {vncVisible && (
+              <VncPanel
+                vncUrl={containerDetail?.vnc_url}
+                running={containerDetail?.running ?? false}
+                onStart={() => handleStartContainer()}
+              />
+            )}
+          </div>
+
+          {/* Automation panel */}
+          <div>
+            <AutomationPanel
+              automations={automations}
+              selectedAutomation={selectedAutomation}
+              automationGraph={automationGraph}
+              availableActions={availableActions}
+              containerRunning={containerDetail?.running ?? false}
+              onSelectAutomation={setSelectedAutomation}
+              onNewAutomation={() => setCreateAutomationOpen(true)}
+              onRun={handleRunAutomation}
+              onSave={handleSaveAutomation}
+              onDelete={handleDeleteAutomation}
+              onUpdateGraph={setAutomationGraph}
+              saveError={saveError}
+              saving={saving}
+            />
+          </div>
+        </>
       )}
 
       {/* Modals */}
