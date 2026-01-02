@@ -16,7 +16,12 @@ modules_enabled = {
   "disco";
   "pep";
   "bookmarks";
+  "ping";
+  "smacks";
 }
+
+c2s_timeout = 300
+s2s_timeout = 300
 
 -- If you want message carbons later: add "carbons" and the xep module.
 -- For now keep minimal.
