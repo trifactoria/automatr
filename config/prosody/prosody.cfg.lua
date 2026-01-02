@@ -10,6 +10,7 @@ log = {
 -- Core modules needed for auth + MUC + service discovery
 modules_enabled = {
   "roster";
+  "register";
   "saslauth";
   "tls";
   "dialback";

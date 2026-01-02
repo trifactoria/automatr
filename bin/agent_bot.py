@@ -24,12 +24,12 @@ def env(name: str, default: str | None = None) -> str:
 
 
 def derive_node_name() -> str:
-    # DB/UI-provided name injected by host (app.py sets AUTOMATR_NODE)
+    # Host injects AUTOMATR_NODE=name (e.g. "tests")
     node = (os.getenv("AUTOMATR_NODE") or os.getenv("AUTOMATR_CONTAINER_NAME") or "").strip()
     if node:
         return node
 
-    # fallback
+    # fallback: hostname, stripping "automatr-" prefix if present
     hn = (os.getenv("HOSTNAME") or socket.gethostname() or "agent").strip()
     if hn.startswith("automatr-"):
         hn = hn[len("automatr-") :]
@@ -37,6 +37,7 @@ def derive_node_name() -> str:
 
 
 def derive_nick(node: str) -> str:
+    # Required convention: agent-<container human name>
     return f"agent-{node}"
 
 
@@ -59,9 +60,20 @@ def load_cfg() -> Cfg:
     password = env("AUTOMATR_XMPP_PASSWORD", "supersecret")
     room = env("AUTOMATR_XMPP_MUC", f"automatr@conference.{domain}")
     insecure_tls = env("AUTOMATR_XMPP_INSECURE_TLS", "0").lower() in ("1", "true", "yes", "on")
+
     node = derive_node_name()
     nick = derive_nick(node)
-    return Cfg(domain=domain, host=host, port=port, password=password, room=room, node=node, nick=nick, insecure_tls=insecure_tls)
+
+    return Cfg(
+        domain=domain,
+        host=host,
+        port=port,
+        password=password,
+        room=room,
+        node=node,
+        nick=nick,
+        insecure_tls=insecure_tls,
+    )
 
 
 def resolve_ipv4(name: str) -> str:
@@ -78,11 +90,13 @@ def make_ssl_context(insecure: bool) -> ssl.SSLContext:
 
 class AgentBot(slixmpp.ClientXMPP):
     def __init__(self, cfg: Cfg):
-        jid = f"agent-tests@{cfg.domain}"
+        # IMPORTANT: unique identity per container (jid=user@domain) where user == nick
+        jid = f"{cfg.nick}@{cfg.domain}"
         super().__init__(jid, cfg.password)
+
         self.cfg = cfg
         self._ready = asyncio.Event()
-        self._recent = {}
+        self._recent: dict[tuple[str, str, str], float] = {}
 
         # XML-first on 5222; STARTTLS allowed
         self.use_ssl = False
@@ -90,21 +104,51 @@ class AgentBot(slixmpp.ClientXMPP):
         self.disable_starttls = False
         self.ssl_context = make_ssl_context(cfg.insecure_tls)
 
+        # Core plugins
         self.register_plugin("xep_0030")  # disco
         self.register_plugin("xep_0199")  # ping
         self.register_plugin("xep_0045")  # muc
 
+        # In-band registration (XEP-0077) — this is what you’re missing right now
+        self.register_plugin("xep_0077")
+        self.add_event_handler("register", self.on_register)
+
+        # Lifecycle
         self.add_event_handler("session_start", self.on_session_start)
         self.add_event_handler("connection_failed", self.on_connection_failed)
         self.add_event_handler("disconnected", self.on_disconnected)
 
-        # slixmpp 1.10: be explicit
+        # Messages
         self.add_event_handler("message", self.on_message)
         self.add_event_handler("groupchat_message", self.on_message)
         self.add_event_handler("chat_message", self.on_message)
 
+    async def on_register(self, _iq):
+        """
+        Called when server supports in-band registration and the account isn’t authorized.
+        We register username==jid user (agent-tests) and password from env.
+        """
+        logging.warning("in-band registration: attempting for %s", self.boundjid.bare)
+        try:
+            iq = self.Iq()
+            iq["type"] = "set"
+            iq["register"]["username"] = self.boundjid.user
+            iq["register"]["password"] = self.cfg.password
+            await iq.send()
+            logging.warning("in-band registration: success for %s", self.boundjid.bare)
+        except Exception:
+            logging.exception("in-band registration: failed for %s", self.boundjid.bare)
+            # If registration fails, disconnect so the container doesn’t spin.
+            self.disconnect()
+
     async def on_session_start(self, _event):
-        logging.info("session_start: join %s as %s (node=%s)", self.cfg.room, self.cfg.nick, self.cfg.node)
+        logging.info(
+            "session_start: jid=%s join %s as %s (node=%s)",
+            self.boundjid.bare,
+            self.cfg.room,
+            self.cfg.nick,
+            self.cfg.node,
+        )
         self.send_presence()
         try:
             await self.get_roster()
@@ -118,10 +162,10 @@ class AgentBot(slixmpp.ClientXMPP):
         self._ready.set()
 
     def on_connection_failed(self, _event):
-        logging.error("connection_failed")
+        logging.error("connection_failed jid=%s", self.boundjid.bare)
 
     def on_disconnected(self, _event):
-        logging.warning("disconnected")
+        logging.warning("disconnected jid=%s", self.boundjid.bare)
 
     def on_message(self, msg):
         body = (msg.get("body") or "").strip()
@@ -139,12 +183,10 @@ class AgentBot(slixmpp.ClientXMPP):
             if now - ts > 2.0:
                 del self._recent[k]
 
+        # de-dupe echoes / repeats
         if key in self._recent:
             return
         self._recent[key] = now
-
-        # Debug: comment out later if noisy
-        logging.info("rx type=%s from=%s body=%r", mtype, frm, body)
 
         is_group = (mtype == "groupchat")
         is_direct = (mtype == "chat")
@@ -160,7 +202,6 @@ class AgentBot(slixmpp.ClientXMPP):
             jid=str(self.boundjid),
         )
 
-        # Canonical entry point (bot_commands also provides compat aliases)
         response = bot_commands.handle_message(body, ctx, is_direct=is_direct, is_group=is_group)
         if response is None:
             return
@@ -183,6 +224,7 @@ def build_connect_call(xmpp: AgentBot, ip: str, port: int) -> Tuple[Tuple[Any, .
     logging.info("slixmpp.connect signature: %s", sig)
 
     kwargs: Dict[str, Any] = {}
+
     if "use_ssl" in params:
         kwargs["use_ssl"] = False
     if "use_tls" in params:
@@ -209,10 +251,11 @@ def build_connect_call(xmpp: AgentBot, ip: str, port: int) -> Tuple[Tuple[Any, .
 async def amain() -> int:
     cfg = load_cfg()
     ip = resolve_ipv4(cfg.host)
+    jid = f"{cfg.nick}@{cfg.domain}"
 
     logging.info(
         "connecting jid=%s host=%s(%s) port=%d room=%s node=%s nick=%s insecure_tls=%s",
-        f"agent-tests@{cfg.domain}",
+        jid,
         cfg.host,
         ip,
         cfg.port,
@@ -233,7 +276,7 @@ async def amain() -> int:
     if not ok:
         raise RuntimeError("connect() returned False")
 
-    # For older non-async slixmpp, process exists; for 1.10 async-native it usually doesn't.
+    # slixmpp builds vary
     if hasattr(xmpp, "process"):
         xmpp.process(forever=True)
         return 0
