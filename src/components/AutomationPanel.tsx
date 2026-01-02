@@ -12,6 +12,7 @@ export function AutomationPanel({
   automationGraph,
   availableActions,
   actionsSchema,
+  containerName,
   containerRunning,
   onSelectAutomation,
   onNewAutomation,
@@ -27,6 +28,7 @@ export function AutomationPanel({
   automationGraph: AutomationGraph | null;
   availableActions: string[];
   actionsSchema: Record<string, ActionDef>;
+  containerName?: string | null;
   containerRunning: boolean;
   onSelectAutomation: (name: string) => void;
   onNewAutomation: () => void;
@@ -143,18 +145,20 @@ export function AutomationPanel({
               <div className="flex h-[300px] items-center justify-center text-gray-500">Loading...</div>
             ) : (
               <EditorTab
+                vars={automationGraph.vars}
                 steps={automationGraph.steps}
                 availableActions={availableActions}
                 actionsSchema={actionsSchema}
+                onUpdateVars={(vars) => onUpdateGraph({ ...automationGraph, vars })}
                 onUpdateSteps={(steps) => onUpdateGraph({ ...automationGraph, steps })}
               />
             )}
           </>
         )}
 
-        {activeTab === "logs" && <LogsTab />}
+        {activeTab === "logs" && <LogsTab containerName={containerName} />}
 
-        {activeTab === "xdotool" && <XdotoolTab />}
+        {activeTab === "xdotool" && <XdotoolTab containerName={containerName} containerRunning={containerRunning} />}
       </div>
     </div>
   );
