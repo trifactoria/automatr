@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { AutomationRow, AutomationGraph } from "@/lib/types";
+import type { AutomationRow, AutomationGraph, ActionDef } from "@/lib/types";
 import { EditorTab } from "./EditorTab";
 import { LogsTab } from "./LogsTab";
 import { XdotoolTab } from "./XdotoolTab";
@@ -26,7 +26,7 @@ export function AutomationPanel({
   selectedAutomation: string;
   automationGraph: AutomationGraph | null;
   availableActions: string[];
-  actionsSchema: Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>;
+  actionsSchema: Record<string, ActionDef>;
   containerRunning: boolean;
   onSelectAutomation: (name: string) => void;
   onNewAutomation: () => void;

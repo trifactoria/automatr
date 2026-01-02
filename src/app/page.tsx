@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
-import type { ContainerSummary, ContainerDetail, AutomationSummary, AutomationGraph } from "@/lib/types";
+import type { ContainerSummary, ContainerDetail, AutomationSummary, AutomationGraph, ActionDef } from "@/lib/types";
 
 import { HostDashboard } from "@/components/HostDashboard";
 import { ContainerBar } from "@/components/ContainerBar";
@@ -23,7 +23,7 @@ export default function Page() {
   const [containers, setContainers] = useState<ContainerSummary[]>([]);
   const [automations, setAutomations] = useState<AutomationSummary[]>([]);
   const [availableActions, setAvailableActions] = useState<string[]>(["sleep"]);
-  const [actionsSchema, setActionsSchema] = useState<Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>>({});
+  const [actionsSchema, setActionsSchema] = useState<Record<string, ActionDef>>({});
 
   // Selected container
   const [selectedContainer, setSelectedContainer] = useState<string>("");
