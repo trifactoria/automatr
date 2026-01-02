@@ -9,6 +9,7 @@ import { HostDashboard } from "@/components/HostDashboard";
 import { ContainerBar } from "@/components/ContainerBar";
 import { VncPanel } from "@/components/VncPanel";
 import { AutomationPanel } from "@/components/AutomationPanel";
+import { Toggle } from "@/components/Toggle";
 import { CreateContainerModal } from "@/components/modals/CreateContainerModal";
 import { CreateAutomationModal } from "@/components/modals/CreateAutomationModal";
 
@@ -27,8 +28,9 @@ export default function Page() {
   const [selectedContainer, setSelectedContainer] = useState<string>("");
   const [containerDetail, setContainerDetail] = useState<ContainerDetail | null>(null);
 
-  // VNC visibility (UI-only toggle)
+  // VNC visibility and takeover (UI-only toggles)
   const [vncVisible, setVncVisible] = useState(false);
+  const [takeover, setTakeover] = useState(false);
 
   // Selected automation
   const [selectedAutomation, setSelectedAutomation] = useState<string>("");
@@ -245,26 +247,24 @@ export default function Page() {
     }
   }
 
-  async function handleCreateAutomation(payload: { name: string; description: string; yaml: string }) {
-    try {
-      // Note: CreateAutomationModal still uses yaml but this will be handled by backend
-      // For now we'll use the POST /automations endpoint (backend should handle yaml parsing)
-      // This maintains compatibility with the existing modal while backend handles the conversion
-      // TODO: Update modal to use graph-based creation once backend supports it
-      const response = await fetch(`${api.API_BASE}/automations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to create automation: ${response.statusText}`);
-      }
-      await refreshAutomations();
-      setSelectedAutomation(payload.name);
-    } catch (e) {
-      console.error("Failed to create automation:", e);
-    }
+  function handleCreateAutomation(payload: { name: string; description: string }) {
+    // Create empty automation graph in memory (don't call backend until user saves)
+    const newGraph: AutomationGraph = {
+      name: payload.name,
+      description: payload.description,
+      vars: [],
+      steps: [],
+    };
+
+    // Set it as the selected automation and load into editor
+    setSelectedAutomation(payload.name);
+    setAutomationGraph(newGraph);
+
+    // Add to local automations list (will sync with backend on save)
+    setAutomations((prev) => [
+      ...prev,
+      { name: payload.name, description: payload.description },
+    ]);
   }
 
   return (
@@ -305,6 +305,10 @@ export default function Page() {
             containers={containers}
             onStart={handleStartContainer}
             onStop={handleStopContainer}
+            onRestart={async (name) => {
+              setSelectedContainer(name);
+              await handleRestartContainer();
+            }}
             onViewVnc={handleSelectContainer}
           />
         </>
@@ -329,24 +333,22 @@ export default function Page() {
             />
           </div>
 
-          {/* VNC panel with UI-only show/hide toggle */}
+          {/* VNC panel with UI-only show/hide + takeover toggles */}
           <div className="mb-4 rounded-2xl border bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
               <div className="text-lg font-semibold text-gray-900">VNC Display</div>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={vncVisible}
-                  onChange={(e) => setVncVisible(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-sm font-medium text-gray-700">Show VNC</span>
-              </label>
+              <div className="flex items-center gap-4">
+                <Toggle label="Show VNC" checked={vncVisible} onChange={setVncVisible} />
+                {vncVisible && (
+                  <Toggle label="Takeover" checked={takeover} onChange={setTakeover} />
+                )}
+              </div>
             </div>
             {vncVisible && (
               <VncPanel
                 vncUrl={containerDetail?.vnc_url}
                 running={containerDetail?.running ?? false}
+                takeover={takeover}
                 onStart={() => handleStartContainer()}
               />
             )}
