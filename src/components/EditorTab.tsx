@@ -109,8 +109,10 @@ export function EditorTab({
         <ConditionsModal
           open={true}
           clauses={steps[editingConditionsIndex]?.clauses || []}
+          vars={vars}
           onClose={() => setEditingConditionsIndex(null)}
           onSave={handleSaveConditions}
+          onUpdateVars={onUpdateVars}
         />
       )}
     </div>
