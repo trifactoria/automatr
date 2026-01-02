@@ -144,6 +144,18 @@ export function normalizeInputStatus(resp: InputStatusResponse): InputStatus {
   };
 }
 
+// Logs
+export type LogsLinesResponse = { ok: true; container: string; tail: number; lines: string[] } | ApiErrorResponse;
+
+export type StartupLogsResponse =
+  | ({ ok: true; container: string; tail: number; timestamps: boolean; lines: string[] })
+  | ApiErrorResponse;
+
+export type AutomationLogsResponse =
+  | ({ ok: true; container: string; date: string; tail: number; path: string; lines: string[] })
+  | ApiErrorResponse;
+
+
 // API Response Envelopes
 export type ApiOkResponse<T = any> = { ok: true } & T;
 export type ApiErrorResponse = { ok: false; error: string; detail?: string };
