@@ -145,9 +145,11 @@ export function AutomationPanel({
               <div className="flex h-[300px] items-center justify-center text-gray-500">Loading...</div>
             ) : (
               <EditorTab
+                vars={automationGraph.vars}
                 steps={automationGraph.steps}
                 availableActions={availableActions}
                 actionsSchema={actionsSchema}
+                onUpdateVars={(vars) => onUpdateGraph({ ...automationGraph, vars })}
                 onUpdateSteps={(steps) => onUpdateGraph({ ...automationGraph, steps })}
               />
             )}

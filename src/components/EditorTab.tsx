@@ -1,19 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import type { GraphStep, StepClause, ActionDef } from "@/lib/types";
+import type { GraphStep, GraphVar, StepClause, ActionDef } from "@/lib/types";
+import { VarsCard } from "./VarsCard";
 import { StepCard } from "./StepCard";
 import { ConditionsModal } from "./ConditionsModal";
 
 export function EditorTab({
+  vars,
   steps,
   availableActions,
   actionsSchema,
+  onUpdateVars,
   onUpdateSteps,
 }: {
+  vars: GraphVar[];
   steps: GraphStep[];
   availableActions: string[];
   actionsSchema: Record<string, ActionDef>;
+  onUpdateVars: (vars: GraphVar[]) => void;
   onUpdateSteps: (steps: GraphStep[]) => void;
 }) {
   const [editingConditionsIndex, setEditingConditionsIndex] = useState<number | null>(null);
@@ -61,6 +66,9 @@ export function EditorTab({
 
   return (
     <div className="space-y-4">
+      {/* Vars card */}
+      <VarsCard vars={vars} onUpdate={onUpdateVars} />
+
       {/* Steps list */}
       {steps.length === 0 ? (
         <div className="rounded-lg border border-gray-300 bg-gray-50 p-8 text-center text-gray-500">
