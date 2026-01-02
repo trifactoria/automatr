@@ -12,6 +12,7 @@ export function AutomationPanel({
   automationGraph,
   availableActions,
   actionsSchema,
+  containerName,
   containerRunning,
   onSelectAutomation,
   onNewAutomation,
@@ -27,6 +28,7 @@ export function AutomationPanel({
   automationGraph: AutomationGraph | null;
   availableActions: string[];
   actionsSchema: Record<string, ActionDef>;
+  containerName?: string | null;
   containerRunning: boolean;
   onSelectAutomation: (name: string) => void;
   onNewAutomation: () => void;
@@ -154,7 +156,7 @@ export function AutomationPanel({
 
         {activeTab === "logs" && <LogsTab />}
 
-        {activeTab === "xdotool" && <XdotoolTab />}
+        {activeTab === "xdotool" && <XdotoolTab containerName={containerName} containerRunning={containerRunning} />}
       </div>
     </div>
   );

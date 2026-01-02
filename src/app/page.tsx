@@ -367,6 +367,7 @@ export default function Page() {
               automationGraph={automationGraph}
               availableActions={availableActions}
               actionsSchema={actionsSchema}
+              containerName={selectedContainer}
               containerRunning={containerDetail?.running ?? false}
               onSelectAutomation={setSelectedAutomation}
               onNewAutomation={() => setCreateAutomationOpen(true)}
