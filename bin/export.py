@@ -250,7 +250,7 @@ def compile_script_text(
         enabled = bool(int(step.get("enabled", 1))) if isinstance(step.get("enabled"), (int, str)) else bool(step.get("enabled", True))
 
         lines.append(f"def step_{step_num}():")
-        lines.append("    aa.check_stop()")
+        lines.append("    aa._check_stop()")
 
         if not enabled:
             lines.append("    return None")
@@ -333,7 +333,7 @@ def compile_script_text(
         lines.append(f"        {n}: step_{n},")
     lines.append("    }")
     lines.append("    while pc in fns:")
-    lines.append("        aa.check_stop()")
+    lines.append("        aa._check_stop()")
     lines.append("        fn = fns[pc]")
     lines.append("        nxt = fn()")
     lines.append("        if nxt is None:")

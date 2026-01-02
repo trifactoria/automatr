@@ -26,14 +26,14 @@ class AutomatrStopped(SystemExit):
     pass
 
 
-def check_stop() -> None:
+def _check_stop() -> None:
     # Existence-only latch. Empty file is fine.
     if STOP_FILE.exists():
         raise AutomatrStopped("STOP file present")
 
 
 def _run(argv: list[str], *, check: bool = True, capture: bool = False, text: bool = True) -> subprocess.CompletedProcess:
-    check_stop()
+    _check_stop()
     return subprocess.run(
         argv,
         check=check,
@@ -50,7 +50,7 @@ def notify(msg: str, title: str = "AUTOMATR") -> None:
     - Enqueue a small text file in /automatr/notify.queue.
     Host-side app.py consumes it and runs notify-send.
     """
-    check_stop()
+    _check_stop()
     try:
         NOTIFY_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
         ts = int(time.time() * 1000)
@@ -63,7 +63,7 @@ def notify(msg: str, title: str = "AUTOMATR") -> None:
 
 
 def sleep(seconds: float) -> None:
-    check_stop()
+    _check_stop()
     time.sleep(float(seconds))
 
 
@@ -77,7 +77,7 @@ def get_buffer() -> str:
 
 
 def _clipboard_set(text: str) -> None:
-    check_stop()
+    _check_stop()
     # Feed stdin to xclip
     p = subprocess.Popen(
         [XCLIP, "-selection", "clipboard"],
@@ -135,7 +135,7 @@ def dragcopy(start_x: int, start_y: int, end_x: int, end_y: int, button: int = 1
     Drag-select region, copy (ctrl+c), read clipboard into buffer.
     Assumes the UI supports drag selection and ctrl+c copies selected text.
     """
-    check_stop()
+    _check_stop()
     drag(start_x, start_y, end_x, end_y, button=button)
     sleep(0.05)
     key("ctrl+c")
