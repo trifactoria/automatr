@@ -32,7 +32,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [inputValue, setInputValue] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentNick, setCurrentNick] = useState<string>(process.env.NEXT_PUBLIC_XMPP_NICK || "andy");
+  const [currentNick, setCurrentNick] = useState<string>(XMPP_CONFIG.username);
 
   const connectionRef = useRef<any>(null);
   const StropheRef = useRef<any>(null);
