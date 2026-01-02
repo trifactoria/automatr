@@ -262,7 +262,7 @@ export async function getStartupLogs(
     `/containers/${encodeURIComponent(name)}/logs/startup?tail=${encodeURIComponent(tail)}&timestamps=${timestamps}`
   );
   checkApiResponse(response, "Get startup logs");
-  return { lines: response.lines || [] };
+  return { lines: (response as any).lines || [] };
 }
 
 export async function getAutomationLogs(
@@ -278,6 +278,6 @@ export async function getAutomationLogs(
     `/containers/${encodeURIComponent(name)}/logs/automation?${qs.toString()}`
   );
   checkApiResponse(response, "Get automation logs");
-  return { lines: response.lines || [] };
+  return { lines: (response as any).lines || [] };
 }
 
