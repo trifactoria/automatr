@@ -81,3 +81,36 @@ export type ActionsCheck = {
   extra_in_wrapper: string[];
 };
 
+// Action Schema Types
+export type ActionParamDef = {
+  name: string;
+  type: "str" | "int" | "float" | "bool";
+  required: boolean;
+  default: string | number | boolean | null;
+  kind: string;
+};
+
+export type ActionDef = {
+  action: string;
+  params: ActionParamDef[];
+};
+
+export type ActionsSchemaResponse = {
+  ok: true;
+  schema: Record<string, ActionDef> | ActionDef[];
+};
+
+// API Response Envelopes
+export type ApiOkResponse<T = any> = { ok: true } & T;
+export type ApiErrorResponse = { ok: false; error: string; detail?: string };
+export type ApiResponse<T = any> = ApiOkResponse<T> | ApiErrorResponse;
+
+// Specific API Response Types
+export type ContainerDetailResponse = { ok: true; container: ContainerDetail };
+export type AutomationGraphResponse = { ok: true; graph: AutomationGraph };
+export type SaveAutomationResponse = { ok: true; exported: boolean } | ApiErrorResponse;
+
+// Summary types (used in lists)
+export type ContainerSummary = ContainerRow;
+export type AutomationSummary = AutomationRow;
+
