@@ -81,3 +81,17 @@ export type ActionsCheck = {
   extra_in_wrapper: string[];
 };
 
+// API Response Envelopes
+export type ApiOkResponse<T = any> = { ok: true } & T;
+export type ApiErrorResponse = { ok: false; error: string; detail?: string };
+export type ApiResponse<T = any> = ApiOkResponse<T> | ApiErrorResponse;
+
+// Specific API Response Types
+export type ContainerDetailResponse = { ok: true; container: ContainerDetail };
+export type AutomationGraphResponse = { ok: true; graph: AutomationGraph };
+export type SaveAutomationResponse = { ok: true; exported: boolean } | ApiErrorResponse;
+
+// Summary types (used in lists)
+export type ContainerSummary = ContainerRow;
+export type AutomationSummary = AutomationRow;
+
