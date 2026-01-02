@@ -11,6 +11,7 @@ export function AutomationPanel({
   selectedAutomation,
   automationGraph,
   availableActions,
+  actionsSchema,
   containerRunning,
   onSelectAutomation,
   onNewAutomation,
@@ -25,6 +26,7 @@ export function AutomationPanel({
   selectedAutomation: string;
   automationGraph: AutomationGraph | null;
   availableActions: string[];
+  actionsSchema: Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>;
   containerRunning: boolean;
   onSelectAutomation: (name: string) => void;
   onNewAutomation: () => void;
@@ -143,6 +145,7 @@ export function AutomationPanel({
               <EditorTab
                 steps={automationGraph.steps}
                 availableActions={availableActions}
+                actionsSchema={actionsSchema}
                 onUpdateSteps={(steps) => onUpdateGraph({ ...automationGraph, steps })}
               />
             )}

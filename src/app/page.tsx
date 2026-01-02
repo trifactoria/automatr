@@ -23,6 +23,7 @@ export default function Page() {
   const [containers, setContainers] = useState<ContainerSummary[]>([]);
   const [automations, setAutomations] = useState<AutomationSummary[]>([]);
   const [availableActions, setAvailableActions] = useState<string[]>(["sleep"]);
+  const [actionsSchema, setActionsSchema] = useState<Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>>({});
 
   // Selected container
   const [selectedContainer, setSelectedContainer] = useState<string>("");
@@ -91,9 +92,13 @@ export default function Page() {
 
   async function fetchAvailableActions() {
     try {
-      const check = await api.getActionsCheck();
+      const [check, schema] = await Promise.all([
+        api.getActionsCheck(),
+        api.getActionsSchema().catch(() => ({})), // Fallback to empty if schema endpoint doesn't exist yet
+      ]);
       // Use wrapper_actions (public actions only)
       setAvailableActions(check.wrapper_actions.length > 0 ? check.wrapper_actions : ["sleep"]);
+      setActionsSchema(schema);
     } catch (e) {
       console.error("Failed to fetch actions:", e);
     }
@@ -361,6 +366,7 @@ export default function Page() {
               selectedAutomation={selectedAutomation}
               automationGraph={automationGraph}
               availableActions={availableActions}
+              actionsSchema={actionsSchema}
               containerRunning={containerDetail?.running ?? false}
               onSelectAutomation={setSelectedAutomation}
               onNewAutomation={() => setCreateAutomationOpen(true)}

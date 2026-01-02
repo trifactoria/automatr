@@ -8,10 +8,12 @@ import { ConditionsModal } from "./ConditionsModal";
 export function EditorTab({
   steps,
   availableActions,
+  actionsSchema,
   onUpdateSteps,
 }: {
   steps: GraphStep[];
   availableActions: string[];
+  actionsSchema: Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>;
   onUpdateSteps: (steps: GraphStep[]) => void;
 }) {
   const [editingConditionsIndex, setEditingConditionsIndex] = useState<number | null>(null);
@@ -58,6 +60,7 @@ export function EditorTab({
               step={step}
               stepIndex={idx}
               availableActions={availableActions}
+              actionsSchema={actionsSchema}
               onUpdate={(updates) => handleUpdateStep(idx, updates)}
               onDelete={() => handleDeleteStep(idx)}
               onEditConditions={() => setEditingConditionsIndex(idx)}

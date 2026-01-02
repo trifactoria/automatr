@@ -81,6 +81,25 @@ export type ActionsCheck = {
   extra_in_wrapper: string[];
 };
 
+// Action Schema Types
+export type ActionParamDef = {
+  key: string;
+  type: "str" | "int" | "float" | "bool";
+  default: string;
+  description?: string;
+};
+
+export type ActionSchema = {
+  name: string;
+  params: ActionParamDef[];
+  description?: string;
+};
+
+export type ActionsSchemaResponse = {
+  ok: true;
+  schemas: Record<string, ActionSchema>;
+};
+
 // API Response Envelopes
 export type ApiOkResponse<T = any> = { ok: true } & T;
 export type ApiErrorResponse = { ok: false; error: string; detail?: string };
