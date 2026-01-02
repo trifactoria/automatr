@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { GraphStep, StepClause } from "@/lib/types";
+import type { GraphStep, StepClause, ActionDef } from "@/lib/types";
 import { StepCard } from "./StepCard";
 import { ConditionsModal } from "./ConditionsModal";
 
@@ -13,7 +13,7 @@ export function EditorTab({
 }: {
   steps: GraphStep[];
   availableActions: string[];
-  actionsSchema: Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>;
+  actionsSchema: Record<string, ActionDef>;
   onUpdateSteps: (steps: GraphStep[]) => void;
 }) {
   const [editingConditionsIndex, setEditingConditionsIndex] = useState<number | null>(null);
@@ -40,6 +40,20 @@ export function EditorTab({
     onUpdateSteps([...steps, newStep]);
   };
 
+  const handleMoveStepUp = (index: number) => {
+    if (index === 0) return;
+    const newSteps = [...steps];
+    [newSteps[index - 1], newSteps[index]] = [newSteps[index], newSteps[index - 1]];
+    onUpdateSteps(newSteps);
+  };
+
+  const handleMoveStepDown = (index: number) => {
+    if (index === steps.length - 1) return;
+    const newSteps = [...steps];
+    [newSteps[index], newSteps[index + 1]] = [newSteps[index + 1], newSteps[index]];
+    onUpdateSteps(newSteps);
+  };
+
   const handleSaveConditions = (clauses: StepClause[]) => {
     if (editingConditionsIndex === null) return;
     handleUpdateStep(editingConditionsIndex, { clauses });
@@ -59,10 +73,13 @@ export function EditorTab({
               key={idx}
               step={step}
               stepIndex={idx}
+              totalSteps={steps.length}
               availableActions={availableActions}
               actionsSchema={actionsSchema}
               onUpdate={(updates) => handleUpdateStep(idx, updates)}
               onDelete={() => handleDeleteStep(idx)}
+              onMoveUp={() => handleMoveStepUp(idx)}
+              onMoveDown={() => handleMoveStepDown(idx)}
               onEditConditions={() => setEditingConditionsIndex(idx)}
             />
           ))}

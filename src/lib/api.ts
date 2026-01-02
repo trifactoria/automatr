@@ -9,6 +9,7 @@ import type {
   SaveAutomationResponse,
   ActionsCheck,
   ActionsSchemaResponse,
+  ActionDef,
   VncInfo,
   ApiResponse,
   GraphVar,
@@ -163,10 +164,27 @@ export async function getActionsCheck(): Promise<ActionsCheck> {
   return apiGet<ActionsCheck>("/actions/check");
 }
 
-export async function getActionsSchema(): Promise<Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>> {
-  // GET /actions/schema returns {ok: true, schemas: {...}}
-  const response = await apiGet<ActionsSchemaResponse>("/actions/schema");
-  checkApiResponse(response, "Get actions schema");
-  return response.schemas;
+export async function getActionsSchema(): Promise<Record<string, ActionDef>> {
+  try {
+    // GET /actions/schema returns {ok: true, schema: {...}} or {ok: true, schema: [...]}
+    const response = await apiGet<ActionsSchemaResponse>("/actions/schema");
+    checkApiResponse(response, "Get actions schema");
+
+    // Normalize response: if list, convert to map by action name
+    if (Array.isArray(response.schema)) {
+      const map: Record<string, ActionDef> = {};
+      for (const actionDef of response.schema) {
+        map[actionDef.action] = actionDef;
+      }
+      return map;
+    }
+
+    // Already a map
+    return response.schema;
+  } catch (error) {
+    console.error("Failed to fetch actions schema:", error);
+    // Return empty object on any failure (never undefined)
+    return {};
+  }
 }
 

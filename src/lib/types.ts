@@ -83,21 +83,21 @@ export type ActionsCheck = {
 
 // Action Schema Types
 export type ActionParamDef = {
-  key: string;
+  name: string;
   type: "str" | "int" | "float" | "bool";
-  default: string;
-  description?: string;
+  required: boolean;
+  default: string | number | boolean | null;
+  kind: string;
 };
 
-export type ActionSchema = {
-  name: string;
+export type ActionDef = {
+  action: string;
   params: ActionParamDef[];
-  description?: string;
 };
 
 export type ActionsSchemaResponse = {
   ok: true;
-  schemas: Record<string, ActionSchema>;
+  schema: Record<string, ActionDef> | ActionDef[];
 };
 
 // API Response Envelopes

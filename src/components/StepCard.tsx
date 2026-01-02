@@ -1,24 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import type { GraphStep, StepParam } from "@/lib/types";
+import type { GraphStep, StepParam, ActionDef } from "@/lib/types";
 import { Toggle } from "./Toggle";
 
 export function StepCard({
   step,
   stepIndex,
+  totalSteps,
   availableActions,
   actionsSchema,
   onUpdate,
   onDelete,
+  onMoveUp,
+  onMoveDown,
   onEditConditions,
 }: {
   step: GraphStep;
   stepIndex: number;
+  totalSteps: number;
   availableActions: string[];
-  actionsSchema: Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>;
+  actionsSchema: Record<string, ActionDef>;
   onUpdate: (updates: Partial<GraphStep>) => void;
   onDelete: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   onEditConditions: () => void;
 }) {
   const [paramsExpanded, setParamsExpanded] = useState(false);
@@ -30,18 +36,20 @@ export function StepCard({
   };
 
   const handleActionChange = (newAction: string) => {
-    // Get schema for the new action
-    const schema = actionsSchema[newAction];
+    // Get schema for the new action (safe access)
+    const schema = actionsSchema?.[newAction];
 
-    if (schema && schema.params) {
+    if (schema && schema.params && schema.params.length > 0) {
       // Auto-populate params from schema
       const newParams: StepParam[] = schema.params.map((paramDef) => {
-        // Try to preserve existing value if param key matches
-        const existingParam = step.params.find((p) => p.key === paramDef.key);
+        // Try to preserve existing value if param name matches
+        const existingParam = step.params.find((p) => p.key === paramDef.name);
+        // Convert default to string for StepParam value field
+        const defaultValue = paramDef.default != null ? String(paramDef.default) : "";
         return {
-          key: paramDef.key,
+          key: paramDef.name,
           type: paramDef.type as "str" | "int" | "float" | "bool",
-          value: existingParam?.value ?? paramDef.default,
+          value: existingParam?.value ?? defaultValue,
         };
       });
       onUpdate({ action: newAction, params: newParams });
@@ -63,6 +71,25 @@ export function StepCard({
       <div className="mb-3 flex items-center gap-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-800">
           {stepIndex + 1}
+        </div>
+        {/* Step reorder controls */}
+        <div className="flex flex-col gap-0.5">
+          <button
+            onClick={onMoveUp}
+            disabled={stepIndex === 0}
+            className="rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs font-bold hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Move up"
+          >
+            ▲
+          </button>
+          <button
+            onClick={onMoveDown}
+            disabled={stepIndex === totalSteps - 1}
+            className="rounded border border-gray-300 bg-white px-1.5 py-0.5 text-xs font-bold hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Move down"
+          >
+            ▼
+          </button>
         </div>
         <input
           type="text"
@@ -105,7 +132,7 @@ export function StepCard({
           >
             Parameters ({step.params.length}) {paramsExpanded ? "▼" : "▶"}
           </button>
-          {!actionsSchema[step.action] && (
+          {!actionsSchema?.[step.action] && (
             <div className="text-xs text-gray-500 italic">Schema not loaded</div>
           )}
         </div>
@@ -114,7 +141,7 @@ export function StepCard({
           <div className="mt-2 space-y-2">
             {step.params.length === 0 ? (
               <div className="text-sm text-gray-500">
-                {actionsSchema[step.action] ? "No parameters defined for this action" : "No schema available"}
+                {actionsSchema?.[step.action] ? "No parameters defined for this action" : "No schema available"}
               </div>
             ) : (
               step.params.map((param, idx) => (
@@ -124,16 +151,16 @@ export function StepCard({
                     className="w-32 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                     placeholder="Key"
                     value={param.key}
-                    readOnly={!!actionsSchema[step.action]}
+                    readOnly={!!actionsSchema?.[step.action]}
                     onChange={(e) => handleParamChange(idx, "key", e.target.value)}
-                    title={actionsSchema[step.action] ? "Key is defined by action schema" : "Parameter key"}
+                    title={actionsSchema?.[step.action] ? "Key is defined by action schema" : "Parameter key"}
                   />
                   <select
                     className="w-24 rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                     value={param.type}
-                    disabled={!!actionsSchema[step.action]}
+                    disabled={!!actionsSchema?.[step.action]}
                     onChange={(e) => handleParamChange(idx, "type", e.target.value)}
-                    title={actionsSchema[step.action] ? "Type is defined by action schema" : "Parameter type"}
+                    title={actionsSchema?.[step.action] ? "Type is defined by action schema" : "Parameter type"}
                   >
                     <option value="str">str</option>
                     <option value="int">int</option>
@@ -147,7 +174,7 @@ export function StepCard({
                     value={param.value}
                     onChange={(e) => handleParamChange(idx, "value", e.target.value)}
                   />
-                  {!actionsSchema[step.action] && (
+                  {!actionsSchema?.[step.action] && (
                     <button
                       onClick={() => handleDeleteParam(idx)}
                       className="rounded border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
