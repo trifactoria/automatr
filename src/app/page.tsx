@@ -1,270 +1,315 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost } from "@/lib/api";
-import type { Context, ContainerRow, AutomationRow, VncInfo } from "@/lib/types";
+import { useEffect, useState } from "react";
+import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import type { ContainerRow, ContainerDetail, AutomationRow, AutomationGraph, ActionsCheck } from "@/lib/types";
 
-import { Select } from "@/components/Select";
-import { HostDashboard } from "@/components/HostDashboard";
-import { ContainerDashboard } from "@/components/ContainerDashboard";
-
+import { ContainerBar } from "@/components/ContainerBar";
+import { VncPanel } from "@/components/VncPanel";
+import { AutomationPanel } from "@/components/AutomationPanel";
 import { CreateContainerModal } from "@/components/modals/CreateContainerModal";
 import { CreateAutomationModal } from "@/components/modals/CreateAutomationModal";
 
 export default function Page() {
-  // context
-  const [context, setContext] = useState<Context>({ kind: "host" });
-
-  // data
+  // Data
   const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [automations, setAutomations] = useState<AutomationRow[]>([]);
+  const [availableActions, setAvailableActions] = useState<string[]>(["sleep"]);
+
+  // Selected container
+  const [selectedContainer, setSelectedContainer] = useState<string>("");
+  const [containerDetail, setContainerDetail] = useState<ContainerDetail | null>(null);
+
+  // Selected automation
+  const [selectedAutomation, setSelectedAutomation] = useState<string>("");
+  const [automationGraph, setAutomationGraph] = useState<AutomationGraph | null>(null);
 
   // UI state
-  const [diag, setDiag] = useState<string>("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  // container UI
-  const selectedContainerName = context.kind === "container" ? context.name : "";
-  const [vncVisible, setVncVisible] = useState(false);
-  const [takeover, setTakeover] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [vnc, setVnc] = useState<VncInfo | null>(null);
-
-  // automation UI
-  const [automationName, setAutomationName] = useState("");
-  const [editorVisible, setEditorVisible] = useState(false);
-  const [loggerVisible, setLoggerVisible] = useState(false);
-
-  // modals
+  // Modals
   const [createContainerOpen, setCreateContainerOpen] = useState(false);
   const [createAutomationOpen, setCreateAutomationOpen] = useState(false);
 
-  async function refresh() {
-    // These endpoints will be implemented in the host API.
-    // For now they can return [] to keep UI running.
-    const [cs, as] = await Promise.all([
-      apiGet<ContainerRow[]>("/containers").catch(() => []),
-      apiGet<AutomationRow[]>("/automations").catch(() => []),
-    ]);
-    setContainers(cs);
-    setAutomations(as);
-  }
-
+  // Fetch containers and automations on mount
   useEffect(() => {
-    refresh().catch((e) => setDiag(String(e)));
+    refreshContainers();
+    refreshAutomations();
+    fetchAvailableActions();
   }, []);
 
-  // when selecting a container, sync its running state from server view
+  // Fetch container detail when selected container changes
   useEffect(() => {
-    if (context.kind !== "container") return;
-    const c = containers.find((x) => x.name === context.name);
-    if (c) setRunning(!!c.running);
-  }, [context, containers]);
-
-  const dropdownOptions = useMemo(() => {
-    const base = [{ value: "host" as const, label: "Host" }];
-    const cs = containers.map((c) => ({ value: c.name, label: c.name }));
-    return base.concat(cs as any);
-  }, [containers]);
-
-  async function handleSelectContext(v: string) {
-    if (v === "host") {
-      setContext({ kind: "host" });
-      setVncVisible(false);
-      setVnc(null);
-      setRunning(false);
-      setAutomationName("");
-      setEditorVisible(false);
-      setLoggerVisible(false);
-      return;
+    if (selectedContainer) {
+      fetchContainerDetail();
+    } else {
+      setContainerDetail(null);
     }
-    setContext({ kind: "container", name: v });
-  }
+  }, [selectedContainer]);
 
-  async function ensureVncUrl(container: string) {
-    const info = await apiGet<VncInfo>(`/containers/${encodeURIComponent(container)}/vnc_url`);
-    setVnc(info);
-  }
-
-  async function startContainer(name: string) {
-    await apiPost(`/containers/${encodeURIComponent(name)}/start`);
-    await refresh();
-  }
-
-  async function stopContainer(name: string) {
-    await apiPost(`/containers/${encodeURIComponent(name)}/stop`);
-    await refresh();
-  }
-
-  async function stopAuto() {
-    if (context.kind !== "container") return;
-    await apiPost(`/containers/${encodeURIComponent(context.name)}/stop_auto`);
-    await refresh();
-  }
-
-  async function runAutomation() {
-    if (context.kind !== "container") return;
-    if (!automationName) {
-      setDiag("No automation selected");
-      return;
+  // Fetch automation graph when selected automation changes
+  useEffect(() => {
+    if (selectedAutomation) {
+      fetchAutomationGraph();
+    } else {
+      setAutomationGraph(null);
     }
+  }, [selectedAutomation]);
 
+  async function refreshContainers() {
     try {
-      await apiPost(`/containers/${encodeURIComponent(context.name)}/run`, {
-        automation_name: automationName,
+      const cs = await apiGet<ContainerRow[]>("/containers");
+      setContainers(cs);
+    } catch (e) {
+      console.error("Failed to fetch containers:", e);
+    }
+  }
+
+  async function refreshAutomations() {
+    try {
+      const as = await apiGet<AutomationRow[]>("/automations");
+      setAutomations(as);
+    } catch (e) {
+      console.error("Failed to fetch automations:", e);
+    }
+  }
+
+  async function fetchAvailableActions() {
+    try {
+      const check = await apiGet<ActionsCheck>("/actions/check");
+      const actions = [...check.wrapper_actions, ...check.db_actions];
+      setAvailableActions(actions.length > 0 ? actions : ["sleep"]);
+    } catch (e) {
+      console.error("Failed to fetch actions:", e);
+    }
+  }
+
+  async function fetchContainerDetail() {
+    if (!selectedContainer) return;
+    try {
+      const detail = await apiGet<ContainerDetail>(`/containers/${encodeURIComponent(selectedContainer)}`);
+      setContainerDetail(detail);
+    } catch (e) {
+      console.error("Failed to fetch container detail:", e);
+    }
+  }
+
+  async function fetchAutomationGraph() {
+    if (!selectedAutomation) return;
+    try {
+      const graph = await apiGet<AutomationGraph>(`/automations/${encodeURIComponent(selectedAutomation)}/graph`);
+      setAutomationGraph(graph);
+    } catch (e) {
+      console.error("Failed to fetch automation graph:", e);
+      setAutomationGraph(null);
+    }
+  }
+
+  // Container actions
+  async function handleStartContainer() {
+    if (!selectedContainer) return;
+    try {
+      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/start`);
+      await refreshContainers();
+      await fetchContainerDetail();
+    } catch (e) {
+      console.error("Failed to start container:", e);
+    }
+  }
+
+  async function handleStopContainer() {
+    if (!selectedContainer) return;
+    try {
+      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/stop`);
+      await refreshContainers();
+      await fetchContainerDetail();
+    } catch (e) {
+      console.error("Failed to stop container:", e);
+    }
+  }
+
+  async function handleRestartContainer() {
+    if (!selectedContainer) return;
+    try {
+      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/restart`);
+      await refreshContainers();
+      await fetchContainerDetail();
+    } catch (e) {
+      console.error("Failed to restart container:", e);
+    }
+  }
+
+  async function handleStopAuto() {
+    if (!selectedContainer) return;
+    try {
+      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/stop_auto`);
+      await refreshContainers();
+      await fetchContainerDetail();
+    } catch (e) {
+      console.error("Failed to stop auto:", e);
+    }
+  }
+
+  async function handleClearStop() {
+    if (!selectedContainer) return;
+    try {
+      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/clear_stop`);
+      await refreshContainers();
+      await fetchContainerDetail();
+    } catch (e) {
+      console.error("Failed to clear stop:", e);
+    }
+  }
+
+  async function handleCreateContainer(payload: { name: string; description: string }) {
+    try {
+      await apiPost("/containers", payload);
+      await refreshContainers();
+      setSelectedContainer(payload.name);
+    } catch (e) {
+      console.error("Failed to create container:", e);
+    }
+  }
+
+  // Automation actions
+  async function handleRunAutomation() {
+    if (!selectedContainer || !selectedAutomation) return;
+    try {
+      await apiPost(`/containers/${encodeURIComponent(selectedContainer)}/run`, {
+        automation: selectedAutomation,
       });
-      setDiag(`Queued automation: ${automationName}`);
-      await refresh();
-    } catch (e: any) {
-      setDiag(String(e));
+      await refreshContainers();
+      await fetchContainerDetail();
+    } catch (e) {
+      console.error("Failed to run automation:", e);
     }
   }
 
-  // Toggle behavior (container dashboard)
-  useEffect(() => {
-    if (context.kind !== "container") return;
-
-    // Running toggle changed -> call API
-    // Note: this simplistic effect will call on mount; we prevent by checking server known state later if you want.
-  }, [running, context]);
-
-  async function onRunningToggle(v: boolean) {
-    if (context.kind !== "container") return;
-    setRunning(v);
-
+  async function handleSaveAutomation() {
+    if (!selectedContainer || !selectedAutomation || !automationGraph) return;
+    setSaving(true);
+    setSaveError(null);
     try {
-      if (v) await startContainer(context.name);
-      else await stopContainer(context.name);
+      await apiPost("/automations/save", {
+        automation: automationGraph,
+        container: selectedContainer,
+      });
+      await refreshAutomations();
+      await fetchAutomationGraph();
     } catch (e: any) {
-      setDiag(String(e));
-      // revert
-      setRunning(!v);
+      console.error("Failed to save automation:", e);
+      setSaveError(e.message || String(e));
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function onVncToggle(v: boolean) {
-    setVncVisible(v);
-    if (!v) return;
-    if (context.kind !== "container") return;
-
+  async function handleDeleteAutomation() {
+    if (!selectedAutomation) return;
+    if (!confirm(`Are you sure you want to delete automation "${selectedAutomation}"?`)) return;
     try {
-      await ensureVncUrl(context.name);
-    } catch (e: any) {
-      setDiag(String(e));
+      await apiDelete(`/automations/${encodeURIComponent(selectedAutomation)}`);
+      await refreshAutomations();
+      setSelectedAutomation("");
+      setAutomationGraph(null);
+    } catch (e) {
+      console.error("Failed to delete automation:", e);
     }
   }
 
-  // Automation actions (stubs for now)
-  async function createAutomation(payload: { name: string; description: string; yaml: string }) {
-    // You’ll implement backend: POST /automations
-    await apiPost("/automations", payload);
-    await refresh();
-    setAutomationName(payload.name);
-  }
-
-  async function createContainer(payload: { name: string; description: string }) {
-    // You’ll implement backend: POST /containers
-    await apiPost("/containers", payload);
-    await refresh();
-    setContext({ kind: "container", name: payload.name });
-  }
-
-  async function saveAutomation() {
-    // stub: open a save modal later; for now just show diag
-    setDiag("Save modal TODO (rename/overwrite confirmation).");
-  }
-
-  async function deleteAutomation() {
-    // stub: open a delete modal later
-    setDiag("Delete modal TODO (confirm).");
-  }
-
-  // Host dashboard “View” action
-  async function hostViewVnc(name: string) {
-    setContext({ kind: "container", name });
-    setVncVisible(true);
-    await ensureVncUrl(name);
+  async function handleCreateAutomation(payload: { name: string; description: string; yaml: string }) {
+    try {
+      await apiPost("/automations", payload);
+      await refreshAutomations();
+      setSelectedAutomation(payload.name);
+    } catch (e) {
+      console.error("Failed to create automation:", e);
+    }
   }
 
   return (
-    <main className="auto-page mx-auto max-w-6xl p-6">
+    <main className="mx-auto min-h-screen max-w-[1400px] bg-gray-100 p-4">
       {/* Header */}
-      <div className="auto-header mb-4 flex items-center gap-3">
-        <Image
-          src="/logo.png"
-          alt="Automatr logo"
-          width={32}
-          height={32}
-          className="auto-logo rounded-xl border"
-        />
-        <div className="auto-title text-2xl font-bold">Automatr</div>
-        <div className="auto-subtitle ml-auto text-sm text-gray-500">
-          {context.kind === "host" ? "Host Dashboard" : `Container Dashboard: ${context.name}`}
+      <div className="mb-4 flex items-center gap-3 rounded-2xl border bg-white p-4 shadow-sm">
+        <Image src="/logo.png" alt="Automatr logo" width={32} height={32} className="rounded-xl border" />
+        <div className="text-2xl font-bold text-gray-900">Automatr</div>
+        <div className="ml-auto text-sm text-gray-600">
+          {selectedContainer ? `Container: ${selectedContainer}` : "Host Dashboard"}
         </div>
       </div>
 
-      {/* Top bar: context selector */}
-      <div className="auto-card auto-row mb-4 flex flex-wrap items-end gap-3 rounded-2xl border p-4">
-        <div className="w-72">
-          <Select
-            label="Container"
-            value={context.kind === "host" ? ("host" as any) : (context.name as any)}
-            onChange={handleSelectContext}
-            options={dropdownOptions as any}
+      {/* Container selector bar */}
+      <div className="mb-4">
+        <ContainerBar
+          containers={containers}
+          selectedContainer={selectedContainer}
+          containerDetail={containerDetail}
+          onSelectContainer={setSelectedContainer}
+          onNewContainer={() => setCreateContainerOpen(true)}
+          onStart={handleStartContainer}
+          onStop={handleStopContainer}
+          onRestart={handleRestartContainer}
+          onStopAuto={handleStopAuto}
+          onClearStop={handleClearStop}
+        />
+      </div>
+
+      {/* VNC panel (always present when container selected) */}
+      {selectedContainer && (
+        <div className="mb-4">
+          <VncPanel
+            vncUrl={containerDetail?.vnc_url}
+            running={containerDetail?.running ?? false}
+            onStart={handleStartContainer}
           />
         </div>
+      )}
 
-        <button className="auto-btn auto-btn--primary rounded-lg border px-3 py-2" onClick={() => setCreateContainerOpen(true)}>
-          New
-        </button>
-
-        <div className="auto-diag ml-auto rounded-xl bg-gray-50 p-3 text-sm">
-          <div className="auto-diag__title font-semibold">Diagnostics</div>
-          <div className="auto-diag__body text-gray-700 whitespace-pre-wrap break-words">{diag || "—"}</div>
+      {/* Automation panel (always present when container selected) */}
+      {selectedContainer && (
+        <div>
+          <AutomationPanel
+            automations={automations}
+            selectedAutomation={selectedAutomation}
+            automationGraph={automationGraph}
+            availableActions={availableActions}
+            containerRunning={containerDetail?.running ?? false}
+            onSelectAutomation={setSelectedAutomation}
+            onNewAutomation={() => setCreateAutomationOpen(true)}
+            onRun={handleRunAutomation}
+            onSave={handleSaveAutomation}
+            onDelete={handleDeleteAutomation}
+            onUpdateGraph={setAutomationGraph}
+            saveError={saveError}
+            saving={saving}
+          />
         </div>
-      </div>
+      )}
 
-      {/* Body */}
-      {context.kind === "host" ? (
-        <HostDashboard containers={containers} onStart={startContainer} onStop={stopContainer} onViewVnc={hostViewVnc} />
-      ) : (
-        <ContainerDashboard
-          containerName={selectedContainerName}
-          vncVisible={vncVisible}
-          setVncVisible={onVncToggle}
-          running={running}
-          setRunning={onRunningToggle}
-          vnc={vnc}
-          takeover={takeover}
-          setTakeover={setTakeover}
-          automations={automations}
-          automationName={automationName}
-          setAutomationName={setAutomationName}
-          editorVisible={editorVisible}
-          setEditorVisible={setEditorVisible}
-          loggerVisible={loggerVisible}
-          setLoggerVisible={setLoggerVisible}
-          onStopAuto={stopAuto}
-          onRunAutomation={runAutomation}
-          onNewAutomation={() => setCreateAutomationOpen(true)}
-          onSaveAutomation={saveAutomation}
-          onDeleteAutomation={deleteAutomation}
-        />
+      {/* No container selected state */}
+      {!selectedContainer && (
+        <div className="flex h-[400px] items-center justify-center rounded-2xl border bg-white text-gray-500">
+          <div className="text-center">
+            <div className="mb-2 text-lg font-medium">No container selected</div>
+            <div className="text-sm">Select a container or create a new one to get started</div>
+          </div>
+        </div>
       )}
 
       {/* Modals */}
       <CreateContainerModal
         open={createContainerOpen}
         onClose={() => setCreateContainerOpen(false)}
-        onCreate={createContainer}
+        onCreate={handleCreateContainer}
       />
 
       <CreateAutomationModal
         open={createAutomationOpen}
         onClose={() => setCreateAutomationOpen(false)}
-        onCreate={createAutomation}
+        onCreate={handleCreateAutomation}
       />
     </main>
   );
 }
-
