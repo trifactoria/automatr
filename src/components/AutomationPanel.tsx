@@ -154,7 +154,7 @@ export function AutomationPanel({
           </>
         )}
 
-        {activeTab === "logs" && <LogsTab />}
+        {activeTab === "logs" && <LogsTab containerName={containerName} />}
 
         {activeTab === "xdotool" && <XdotoolTab containerName={containerName} containerRunning={containerRunning} />}
       </div>

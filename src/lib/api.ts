@@ -18,6 +18,8 @@ import type {
   InputStatus,
   InputEventsResponse,
   InputEvent,
+  StartupLogsResponse,
+  AutomationLogsResponse,
 } from "./types";
 import { normalizeInputStatus } from "./types";
 
@@ -246,5 +248,36 @@ export async function getInputEvents(
 
   // No events
   return [];
+}
+
+// LOGS
+export async function getStartupLogs(
+  name: string,
+  opts?: { tail?: number; timestamps?: boolean }
+): Promise<{ lines: string[] }> {
+  const tail = opts?.tail ?? 200;
+  const timestamps = opts?.timestamps ? 1 : 0;
+
+  const response = await apiGet<StartupLogsResponse>(
+    `/containers/${encodeURIComponent(name)}/logs/startup?tail=${encodeURIComponent(tail)}&timestamps=${timestamps}`
+  );
+  checkApiResponse(response, "Get startup logs");
+  return { lines: response.lines || [] };
+}
+
+export async function getAutomationLogs(
+  name: string,
+  opts?: { tail?: number; date?: string }
+): Promise<{ lines: string[] }> {
+  const tail = opts?.tail ?? 200;
+  const qs = new URLSearchParams();
+  qs.set("tail", String(tail));
+  if (opts?.date) qs.set("date", opts.date);
+
+  const response = await apiGet<AutomationLogsResponse>(
+    `/containers/${encodeURIComponent(name)}/logs/automation?${qs.toString()}`
+  );
+  checkApiResponse(response, "Get automation logs");
+  return { lines: response.lines || [] };
 }
 
