@@ -54,7 +54,51 @@ export function ConditionsModal({
     setLocalClauses(newClauses);
   };
 
+  // Validate clause ordering
+  const validateClauseOrder = (): { valid: boolean; error?: string } => {
+    if (localClauses.length === 0) return { valid: true };
+
+    // Must start with "if" if any conditionals exist
+    if (localClauses[0].head !== "if") {
+      return { valid: false, error: "First clause must be 'if'" };
+    }
+
+    let sawElse = false;
+    for (let i = 0; i < localClauses.length; i++) {
+      const head = localClauses[i].head;
+
+      // No clauses allowed after "else"
+      if (sawElse) {
+        return { valid: false, error: "'else' must be the last clause" };
+      }
+
+      // "elif" cannot appear before "if"
+      if (head === "elif" && i === 0) {
+        return { valid: false, error: "'elif' cannot be first" };
+      }
+
+      // "else" can only appear once and must be last
+      if (head === "else") {
+        sawElse = true;
+      }
+    }
+
+    return { valid: true };
+  };
+
+  const autoFixOrder = () => {
+    // Sort clauses: if first, then elif, then else last
+    const sorted = [...localClauses].sort((a, b) => {
+      const order = { if: 0, elif: 1, else: 2 };
+      return order[a.head] - order[b.head];
+    });
+    setLocalClauses(sorted);
+  };
+
+  const validation = validateClauseOrder();
+
   const handleSave = () => {
+    if (!validation.valid) return; // Block save if invalid
     onSave(localClauses);
     onClose();
   };
@@ -254,6 +298,24 @@ export function ConditionsModal({
           )}
         </div>
 
+        {/* Validation Error */}
+        {!validation.valid && (
+          <div className="rounded-lg border border-red-300 bg-red-50 p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-red-800">Invalid clause order</div>
+                <div className="text-xs text-red-700">{validation.error}</div>
+              </div>
+              <button
+                onClick={autoFixOrder}
+                className="rounded border border-red-600 bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
+              >
+                Auto-fix Order
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex items-center justify-between border-t border-gray-200 pt-4">
           <button
@@ -271,7 +333,8 @@ export function ConditionsModal({
             </button>
             <button
               onClick={handleSave}
-              className="rounded-lg border border-green-600 bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+              disabled={!validation.valid}
+              className="rounded-lg border border-green-600 bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Save
             </button>
