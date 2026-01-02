@@ -87,6 +87,10 @@ say "GET /actions/check (wrapper public vs DB distinct)"
 curl -sS "$BASE/actions/check"; echo
 hr
 
+say "GET /actions/schema (action param schema from bin/automatr_actions.py)"
+curl -sS "$BASE/actions/schema" | jq .; echo
+hr
+
 say "POST /containers/$CNAME/run"
 curl -sS -X POST "$BASE/containers/$CNAME/run" \
   -H "Content-Type: application/json" \
