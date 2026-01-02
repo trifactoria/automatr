@@ -10,6 +10,7 @@ import { ContainerBar } from "@/components/ContainerBar";
 import { VncPanel } from "@/components/VncPanel";
 import { AutomationPanel } from "@/components/AutomationPanel";
 import { Toggle } from "@/components/Toggle";
+import { ChatModal } from "@/components/ChatModal";
 import { CreateContainerModal } from "@/components/modals/CreateContainerModal";
 import { CreateAutomationModal } from "@/components/modals/CreateAutomationModal";
 
@@ -44,6 +45,7 @@ export default function Page() {
   // Modals
   const [createContainerOpen, setCreateContainerOpen] = useState(false);
   const [createAutomationOpen, setCreateAutomationOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   // Fetch containers and automations on mount
   useEffect(() => {
@@ -54,8 +56,10 @@ export default function Page() {
   useEffect(() => {
     if (selectedContainer) {
       fetchContainerDetail();
+      setViewMode("container");
     } else {
       setContainerDetail(null);
+      setViewMode("host");
     }
   }, [selectedContainer]);
 
@@ -128,7 +132,6 @@ export default function Page() {
   // Container actions
   async function handleSelectContainer(name: string) {
     setSelectedContainer(name);
-    setViewMode("container");
     setVncVisible(false);
   }
 
@@ -198,7 +201,6 @@ export default function Page() {
       await api.createContainer(payload);
       await refreshContainers();
       setSelectedContainer(payload.name);
-      setViewMode("container");
     } catch (e) {
       console.error("Failed to create container:", e);
     }
@@ -279,65 +281,45 @@ export default function Page() {
         <Image src="/logo.png" alt="Automatr logo" width={32} height={32} className="rounded-xl border" />
         <div className="text-2xl font-bold text-gray-900">Automatr</div>
         <div className="ml-auto text-sm text-gray-600">
-          {viewMode === "host" ? "Host Dashboard" : `Container: ${selectedContainer}`}
+          {viewMode === "host" ? "Host Dashboard" : `${selectedContainer} Dashboard`}
         </div>
-        {viewMode === "container" && (
-          <button
-            onClick={() => {
-              setViewMode("host");
-              setSelectedContainer("");
-              setVncVisible(false);
-            }}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50"
-          >
-            ← Back to Host
-          </button>
-        )}
+      </div>
+
+      {/* Unified Container Bar */}
+      <div className="mb-4">
+        <ContainerBar
+          containers={containers}
+          selectedContainer={selectedContainer}
+          containerDetail={containerDetail}
+          showHostOption={viewMode === "container"}
+          onSelectContainer={handleSelectContainer}
+          onNewContainer={() => setCreateContainerOpen(true)}
+          onOpenChat={() => setChatOpen(true)}
+          onStart={() => handleStartContainer()}
+          onStop={() => handleStopContainer()}
+          onRestart={handleRestartContainer}
+          onStopAuto={handleStopAuto}
+          onClearStop={handleClearStop}
+        />
       </div>
 
       {/* Host View */}
       {viewMode === "host" && (
-        <>
-          <div className="mb-4 flex items-center gap-3 rounded-2xl border bg-white p-4">
-            <button
-              className="rounded-lg border border-blue-600 bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              onClick={() => setCreateContainerOpen(true)}
-            >
-              New Container
-            </button>
-          </div>
-          <HostDashboard
-            containers={containers}
-            onStart={handleStartContainer}
-            onStop={handleStopContainer}
-            onRestart={async (name) => {
-              setSelectedContainer(name);
-              await handleRestartContainer();
-            }}
-            onViewVnc={handleSelectContainer}
-          />
-        </>
+        <HostDashboard
+          containers={containers}
+          onStart={handleStartContainer}
+          onStop={handleStopContainer}
+          onRestart={async (name) => {
+            setSelectedContainer(name);
+            await handleRestartContainer();
+          }}
+          onViewVnc={handleSelectContainer}
+        />
       )}
 
       {/* Container View */}
       {viewMode === "container" && selectedContainer && (
         <>
-          {/* Container selector bar */}
-          <div className="mb-4">
-            <ContainerBar
-              containers={containers}
-              selectedContainer={selectedContainer}
-              containerDetail={containerDetail}
-              onSelectContainer={handleSelectContainer}
-              onNewContainer={() => setCreateContainerOpen(true)}
-              onStart={() => handleStartContainer()}
-              onStop={() => handleStopContainer()}
-              onRestart={handleRestartContainer}
-              onStopAuto={handleStopAuto}
-              onClearStop={handleClearStop}
-            />
-          </div>
-
           {/* VNC panel with UI-only show/hide + takeover toggles */}
           <div className="mb-4 rounded-2xl border bg-white p-4">
             <div className="mb-3 flex items-center justify-between">
@@ -393,6 +375,11 @@ export default function Page() {
         open={createAutomationOpen}
         onClose={() => setCreateAutomationOpen(false)}
         onCreate={handleCreateAutomation}
+      />
+
+      <ChatModal
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
       />
     </main>
   );
