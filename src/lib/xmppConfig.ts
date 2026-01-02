@@ -16,7 +16,7 @@ export const XMPP_CONFIG = {
   defaultRoom: process.env.NEXT_PUBLIC_XMPP_DEFAULT_ROOM || "automatr",
 
   // Use WebSocket instead of BOSH (recommended)
-  useWebSocket: true,
+  useWebSocket: false,
 };
 
 export default XMPP_CONFIG;

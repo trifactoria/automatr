@@ -23,7 +23,7 @@ echo "Run docker logs -f automatr-prosody in a new term to watch logs..."
 # starting automatr-tests
 notify-send "Starting automatr-tests"
 echo "Starting automatr-tests..."
-curl -s -X POST http://127.0.0.1:8766/containers/tests/start | jq
+curl -s -X POST http://xps:8766/containers/tests/start | jq
 
 notify-send "Restart complete"
 # End notes
