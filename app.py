@@ -1,6 +1,8 @@
 # app.py
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import json
 import os
 import subprocess
@@ -210,6 +212,67 @@ def docker_exec(container_name: str, argv: list[str], timeout: int = 2) -> tuple
         return cp.returncode, out
     except Exception as e:
         return 99, str(e)
+
+
+def _load_automatr_actions_module():
+    """
+    Load host-side bin/automatr_actions.py dynamically.
+    We do this so the API can expose action schema without importing project packages.
+    """
+    actions_path = (BIN_DIR / "automatr_actions.py").resolve()
+    if not actions_path.exists():
+        raise FileNotFoundError(f"automatr_actions.py not found at {actions_path}")
+
+    spec = importlib.util.spec_from_file_location("automatr_actions_host", str(actions_path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Failed to build import spec for automatr_actions.py")
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _actions_schema_from_module(mod) -> dict:
+    schema: dict[str, dict] = {}
+
+    for name, obj in vars(mod).items():
+        if not (callable(obj) and inspect.isfunction(obj)):
+            continue
+
+        # Public API surface rule: user-callable actions DO NOT start with "_"
+        if name.startswith("_") or name.startswith("__"):
+            continue
+
+        sig = inspect.signature(obj)
+        params_out = []
+        for pname, p in sig.parameters.items():
+            # We treat everything as keyword-friendly (your DB stores key/type/value anyway)
+            ann = None if p.annotation is inspect._empty else p.annotation
+            # Normalize annotation to a simple string when possible
+            if ann is None:
+                ptype = None
+            elif isinstance(ann, type):
+                ptype = ann.__name__
+            else:
+                ptype = str(ann)
+
+            has_default = p.default is not inspect._empty
+            default_val = None if not has_default else p.default
+
+            params_out.append(
+                {
+                    "name": pname,
+                    "type": ptype,               # e.g. "str", "float", etc. (or None)
+                    "required": not has_default, # required if no default
+                    "default": default_val,      # JSON-serializable if simple
+                    "kind": str(p.kind).split(".")[-1],  # POSITIONAL_OR_KEYWORD, etc.
+                }
+            )
+
+        doc = inspect.getdoc(obj) or ""
+        schema[name] = {"params": params_out, "doc": doc}
+
+    return schema
 
 
 def clear_stop(name: str) -> None:
@@ -584,6 +647,16 @@ def actions_check():
         "missing_in_wrapper": missing_in_wrapper,
         "extra_in_wrapper": extra_in_wrapper,
     }
+
+
+@app.get("/actions/schema")
+def actions_schema():
+    try:
+        mod = _load_automatr_actions_module()
+        schema = _actions_schema_from_module(mod)
+        return {"ok": True, "schema": schema}
+    except Exception as e:
+        return {"ok": False, "error": f"schema_failed: {str(e)}"}
 
 
 @app.post("/automations/save")
