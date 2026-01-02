@@ -50,21 +50,23 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     let mounted = true;
 
     // Dynamic import to avoid SSR issues
+    // The package.json exports field should resolve to browser bundle when ssr: false is used in page.tsx
     import("strophe.js")
-      .then((Strophe) => {
+      .then((mod) => {
         if (!mounted) return;
 
-        StropheRef.current = Strophe.Strophe;
+        const Strophe = (mod as any).Strophe;
+        StropheRef.current = Strophe;
 
         // Create connection
         const service = XMPP_CONFIG.useWebSocket ? XMPP_CONFIG.websocketUrl : XMPP_CONFIG.boshUrl;
-        const connection = new Strophe.Strophe.Connection(service);
+        const connection = new Strophe.Connection(service);
 
         connectionRef.current = connection;
 
         // Connection status callback
         const onConnect = (status: number) => {
-          const Status = Strophe.Strophe.Status;
+          const Status = Strophe.Status;
 
           switch (status) {
             case Status.CONNECTING:
@@ -145,10 +147,10 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     );
 
     // Send presence to join room
-    const presence = new Strophe.Strophe.Builder("presence", {
+    const presence = new Strophe.Builder("presence", {
       to: `${roomJid}/${nick}`,
     })
-      .c("x", { xmlns: Strophe.Strophe.NS.MUC })
+      .c("x", { xmlns: Strophe.NS.MUC })
       .tree();
 
     connection.send(presence);
@@ -180,7 +182,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     }
 
     // Extract nickname from full JID (room@domain/nick)
-    const nick = Strophe.Strophe.getResourceFromJid(from);
+    const nick = Strophe.getResourceFromJid(from);
     const isOwnMessage = nick === currentNick;
 
     // Avoid duplicate messages
@@ -215,7 +217,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     if (!from) return true;
 
-    const nick = Strophe.Strophe.getResourceFromJid(from);
+    const nick = Strophe.getResourceFromJid(from);
 
     if (type === "unavailable") {
       console.log("[MUC]", nick, "left the room");

@@ -6,7 +6,7 @@ import * as api from "@/lib/api";
 
 type LogType = "startup" | "automation";
 
-export function LogsTab({ containerName }: { containerName?: string }) {
+export function LogsTab({ containerName }: { containerName?: string | null }) {
   const [activeLogType, setActiveLogType] = useState<LogType>("startup");
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);

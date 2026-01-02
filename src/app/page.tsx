@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type { ContainerSummary, ContainerDetail, AutomationSummary, AutomationGraph, ActionDef } from "@/lib/types";
@@ -10,9 +11,11 @@ import { ContainerBar } from "@/components/ContainerBar";
 import { VncPanel } from "@/components/VncPanel";
 import { AutomationPanel } from "@/components/AutomationPanel";
 import { Toggle } from "@/components/Toggle";
-import { ChatModal } from "@/components/ChatModal";
 import { CreateContainerModal } from "@/components/modals/CreateContainerModal";
 import { CreateAutomationModal } from "@/components/modals/CreateAutomationModal";
+
+// Dynamic import to prevent SSR for ChatModal (Strophe.js is browser-only)
+const ChatModal = dynamic(() => import("@/components/ChatModal").then(m => ({ default: m.ChatModal })), { ssr: false });
 
 type ViewMode = "host" | "container";
 
