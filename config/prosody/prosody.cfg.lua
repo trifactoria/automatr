@@ -18,6 +18,7 @@ modules_enabled = {
   "bookmarks";
   "ping";
   "smacks";
+  "private";
 }
 
 c2s_timeout = 300

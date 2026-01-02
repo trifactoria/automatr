@@ -11,6 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import importlib.util
+import inspect
+
 import docker
 from docker.errors import APIError, NotFound
 from fastapi import FastAPI
@@ -114,6 +117,48 @@ def run_lock(name: str) -> Path:
 
 def stop_file(name: str) -> Path:
     return container_dir(name) / "STOP"
+
+
+def metadata_path(name: str) -> Path:
+    return BIN_CONTAINERS_DIR / name / "metadata.json"
+
+
+def read_container_description(name: str) -> str:
+    """
+    Container description is sourced from bin/containers/{name}/metadata.json.
+    DB table containers is intentionally minimal.
+    """
+    mp = metadata_path(name)
+    if not mp.exists():
+        return ""
+    try:
+        d = json.loads(mp.read_text(encoding="utf-8"))
+        v = (d.get("description") or "").strip()
+        return v
+    except Exception:
+        return ""
+
+
+def write_container_metadata(name: str, description: str) -> None:
+    mp = metadata_path(name)
+    mp.parent.mkdir(parents=True, exist_ok=True)
+
+    data: dict = {}
+    if mp.exists():
+        try:
+            data = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+
+    if "name" not in data:
+        data["name"] = name
+    if "created_at" not in data:
+        data["created_at"] = datetime.utcnow().isoformat() + "Z"
+
+    # Always update description to the latest provided value
+    data["description"] = (description or "").strip()
+
+    mp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def ensure_container_fs(name: str) -> None:
@@ -247,7 +292,7 @@ def _consume_notify_queue_forever(stop_evt: threading.Event) -> None:
         time.sleep(HOST_NOTIFY_POLL)
 
 
-app = FastAPI(title="Automatr Host API", version="0.2.1")
+app = FastAPI(title="Automatr Host API", version="0.2.2")
 
 origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
@@ -292,7 +337,7 @@ def list_containers():
         out.append(
             {
                 "name": name,
-                "description": c.get("description", ""),
+                "description": read_container_description(name),
                 "running": running,
                 "busy": busy,
                 "busy_automation": busy_automation,
@@ -315,23 +360,17 @@ def create_container(payload: dict):
     db.create_container(name, desc)
     ensure_container_fs(name)
 
-    meta = BIN_CONTAINERS_DIR / name / "metadata.json"
-    meta.parent.mkdir(parents=True, exist_ok=True)
-    if not meta.exists():
-        meta.write_text(
-            json.dumps({"name": name, "created_at": datetime.utcnow().isoformat() + "Z"}, indent=2) + "\n",
-            encoding="utf-8",
-        )
+    # Metadata is the durable place for container description.
+    write_container_metadata(name, desc)
 
     return {"ok": True}
 
 
-@app.post("/containers/{name}/start")
-def start_container(name: str):
+def _start_container_impl(name: str) -> tuple[bool, str]:
     if not db.container_exists(name):
-        return {"ok": False, "error": "not_found"}
+        return False, "not_found"
     if is_container_running(name):
-        return {"ok": False, "error": "already_running"}
+        return False, "already_running"
 
     try:
         ensure_container_fs(name)
@@ -346,7 +385,6 @@ def start_container(name: str):
             "AUTOMATR_SCREEN_H": SCREEN_H,
             "AUTOMATR_SCREEN_D": SCREEN_D,
             "DISPLAY": ":99",
-
             # agent bot identity + xmpp routing
             "AUTOMATR_NODE": name,
             "AUTOMATR_XMPP_DOMAIN": XMPP_DOMAIN,
@@ -356,7 +394,7 @@ def start_container(name: str):
             "AUTOMATR_XMPP_PASSWORD": XMPP_PASSWORD,
             "AUTOMATR_XMPP_INSECURE_TLS": XMPP_INSECURE,
         }
-        
+
         volumes = {str(container_dir(name)): {"bind": CONTAINER_ROOT, "mode": "rw"}}
         ports = {"6080/tcp": novnc_port}
 
@@ -374,19 +412,26 @@ def start_container(name: str):
 
         container = docker_client.containers.run(**run_kwargs)
         _RUNTIME[name] = {"container_id": container.id, "container_name": cname, "novnc_port": novnc_port}
-        return {"ok": True}
+        return True, ""
     except APIError as e:
-        return {"ok": False, "error": f"docker_error: {str(e)}"}
+        return False, f"docker_error: {str(e)}"
     except Exception as e:
-        return {"ok": False, "error": f"start_failed: {str(e)}"}
+        return False, f"start_failed: {str(e)}"
 
 
-@app.post("/containers/{name}/stop")
-def stop_container(name: str):
+@app.post("/containers/{name}/start")
+def start_container(name: str):
+    ok, err = _start_container_impl(name)
+    if not ok:
+        return {"ok": False, "error": err}
+    return {"ok": True}
+
+
+def _stop_container_impl(name: str) -> tuple[bool, str]:
     if not db.container_exists(name):
-        return {"ok": False, "error": "not_found"}
+        return False, "not_found"
     if name not in _RUNTIME:
-        return {"ok": False, "error": "not_running"}
+        return False, "not_running"
 
     try:
         cid = _RUNTIME[name]["container_id"]
@@ -394,12 +439,35 @@ def stop_container(name: str):
         c.stop(timeout=10)
         c.remove()
         _RUNTIME.pop(name, None)
-        return {"ok": True}
+        return True, ""
     except NotFound:
         _RUNTIME.pop(name, None)
-        return {"ok": True}
+        return True, ""
     except Exception as e:
-        return {"ok": False, "error": f"stop_failed: {str(e)}"}
+        return False, f"stop_failed: {str(e)}"
+
+
+@app.post("/containers/{name}/stop")
+def stop_container(name: str):
+    ok, err = _stop_container_impl(name)
+    if not ok:
+        return {"ok": False, "error": err}
+    return {"ok": True}
+
+
+@app.post("/containers/{name}/restart")
+def restart_container(name: str):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    # If running, stop first. If not running, treat stop as no-op.
+    if is_container_running(name) or name in _RUNTIME:
+        _stop_container_impl(name)
+
+    ok, err = _start_container_impl(name)
+    if not ok:
+        return {"ok": False, "error": err}
+    return {"ok": True}
 
 
 @app.get("/containers/{name}/vnc_url")
@@ -457,6 +525,67 @@ def list_automations():
     return db.list_automations()
 
 
+@app.get("/automations/{name}")
+def get_automation(name: str):
+    a = db.get_automation_full(name)
+    if not a:
+        return {"ok": False, "error": "not_found"}
+    return {"ok": True, "automation": a}
+
+
+@app.delete("/automations/{name}")
+def delete_automation(name: str):
+    a = db.get_automation(name)
+    if not a:
+        return {"ok": False, "error": "not_found"}
+    db.delete_automation(name)
+    return {"ok": True}
+
+
+def _load_actions_module() -> tuple[Optional[object], str]:
+    actions_path = BIN_DIR / "automatr_actions.py"
+    if not actions_path.exists():
+        return None, f"missing:{actions_path}"
+    try:
+        spec = importlib.util.spec_from_file_location("automatr_actions_live", str(actions_path))
+        if spec is None or spec.loader is None:
+            return None, "import_spec_failed"
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+        return mod, ""
+    except Exception as e:
+        return None, f"import_failed:{e}"
+
+
+@app.get("/actions/check")
+def actions_check():
+    mod, err = _load_actions_module()
+    if not mod:
+        return {"ok": False, "error": err}
+
+    public: list[str] = []
+    for name, obj in inspect.getmembers(mod):
+        # rule: user-facing actions do NOT start with underscore
+        if name.startswith("_"):
+            continue
+        if inspect.isfunction(obj):
+            public.append(name)
+
+    public = sorted(set(public))
+    db_actions = db.list_distinct_step_actions()
+
+    missing_in_wrapper = sorted([a for a in db_actions if a not in public])
+    extra_in_wrapper = sorted([a for a in public if a not in db_actions])
+
+    return {
+        "ok": True,
+        "wrapper_actions": public,
+        "db_actions": db_actions,
+        "missing_in_wrapper": missing_in_wrapper,
+        "extra_in_wrapper": extra_in_wrapper,
+    }
+
+
 @app.post("/automations/save")
 def save_automation(payload: dict):
     name = (payload.get("name") or "").strip()
@@ -508,3 +637,51 @@ def run_automation(name: str, payload: dict):
     job.write_text(f"{automation}\n", encoding="utf-8")
 
     return {"ok": True, "queued": True}
+
+
+@app.get("/automations/{name}/graph")
+def get_automation_graph(name: str):
+    g = db.get_automation_graph(name)
+    if not g:
+        return {"ok": False, "error": "not_found"}
+    return {"ok": True, "graph": g}
+
+
+@app.get("/containers/{name}")
+def get_container(name: str):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    running = is_container_running(name)
+    busy, busy_automation = is_container_busy(name)
+    stop_latched = stop_file(name).exists()
+
+    # Optional: include vnc_url if running
+    vnc_url = None
+    if running and name in _RUNTIME and _RUNTIME[name].get("novnc_port"):
+        novnc_port = _RUNTIME[name]["novnc_port"]
+        vnc_url = f"http://127.0.0.1:{novnc_port}{NOVNC_PATH}"
+
+    # Optional: include run.lock contents if present
+    run_lock_data = None
+    lf = run_lock(name)
+    if lf.exists():
+        try:
+            run_lock_data = json.loads(lf.read_text(encoding="utf-8"))
+        except Exception:
+            run_lock_data = {"_error": "run_lock_unparseable"}
+
+    return {
+        "ok": True,
+        "container": {
+            "name": name,
+            "description": read_container_description(name),
+            "running": running,
+            "busy": busy,
+            "busy_automation": busy_automation,
+            "stop_latched": stop_latched,
+            "vnc_url": vnc_url,
+            "run_lock": run_lock_data,
+        },
+    }
+

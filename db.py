@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Optional, cast
 
 DEFAULT_DB_PATH = os.getenv("AUTOMATR_DB_PATH", "./data/automatr.db")
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -74,6 +74,7 @@ def _sha256(text: str) -> str:
 # Containers
 # ============================================================
 
+
 def list_containers() -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute("SELECT name FROM containers ORDER BY name").fetchall()
@@ -96,6 +97,7 @@ def container_exists(name: str) -> bool:
 # ============================================================
 # Automations
 # ============================================================
+
 
 def list_automations() -> list[dict[str, Any]]:
     with _connect() as conn:
@@ -132,10 +134,39 @@ def get_automation(name: str) -> Optional[dict[str, Any]]:
     return _dict(row) if row else None
 
 
-def delete_automation(name: str) -> None:
+def delete_automation(name: str) -> bool:
+    """
+    Deletes an automation and its graph. Returns True if something was deleted.
+    We delete children explicitly to avoid relying on ON DELETE CASCADE details.
+    """
     with _connect() as conn:
-        conn.execute("DELETE FROM automations WHERE name=?", (name,))
-        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Find step ids first
+            step_rows = conn.execute(
+                "SELECT id FROM automation_steps WHERE automation_name=?",
+                (name,),
+            ).fetchall()
+            step_ids = [int(r["id"]) for r in step_rows]
+
+            if step_ids:
+                # Delete step children
+                conn.executemany("DELETE FROM step_params WHERE step_id=?", [(sid,) for sid in step_ids])
+                conn.executemany("DELETE FROM step_clauses WHERE step_id=?", [(sid,) for sid in step_ids])
+
+            # Delete steps + vars
+            conn.execute("DELETE FROM automation_steps WHERE automation_name=?", (name,))
+            conn.execute("DELETE FROM automation_vars WHERE automation_name=?", (name,))
+
+            # Delete automation row
+            cur = conn.execute("DELETE FROM automations WHERE name=?", (name,))
+            deleted = (cur.rowcount or 0) > 0
+
+            conn.commit()
+            return deleted
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def set_compiled_script(name: str, compiled_py: str) -> None:
@@ -164,9 +195,29 @@ def get_compiled_script(name: str) -> Optional[str]:
     return str(row["compiled_py"]) if row and row["compiled_py"] is not None else None
 
 
+def list_distinct_step_actions() -> list[str]:
+    """
+    Used by /actions/check to see what actions are referenced in the DB.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT action FROM automation_steps ORDER BY action"
+        ).fetchall()
+    out: list[str] = []
+    for r in rows:
+        v = r["action"]
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            out.append(s)
+    return out
+
+
 # ============================================================
 # Vars
 # ============================================================
+
 
 def list_vars(automation_name: str) -> list[dict[str, Any]]:
     with _connect() as conn:
@@ -185,6 +236,7 @@ def list_vars(automation_name: str) -> list[dict[str, Any]]:
 # ============================================================
 # Steps / params / clauses read helpers
 # ============================================================
+
 
 def list_steps(automation_name: str) -> list[dict[str, Any]]:
     with _connect() as conn:
@@ -235,6 +287,10 @@ def list_step_clauses(step_id: int) -> list[dict[str, Any]]:
 
 
 def get_automation_full(name: str) -> Optional[dict[str, Any]]:
+    """
+    Legacy shape (kept for compatibility):
+      {"automation": {...}, "vars": [...], "steps": [...]}
+    """
     auto = get_automation(name)
     if not auto:
         return None
@@ -249,9 +305,58 @@ def get_automation_full(name: str) -> Optional[dict[str, Any]]:
     return {"automation": auto, "vars": vars_, "steps": steps}
 
 
+def get_automation_graph(name: str) -> Optional[dict[str, Any]]:
+    """
+    Canonical editor shape for the UI / API.
+
+    Returns:
+      {
+        "name": str,
+        "description": str,
+        "created_at": str?,
+        "updated_at": str?,
+        "compiled_at": str?,
+        "compiled_hash": str?,
+        "vars": [...],
+        "steps": [
+          {
+            "id": int,
+            "step_num": int,
+            "label": str,
+            "action": str,
+            "enabled": int,
+            "note": str,
+            "params": [...],
+            "clauses": [...]
+          }
+        ]
+      }
+    """
+    full = get_automation_full(name)
+    if not full:
+        return None
+
+    auto = cast(dict[str, Any], full["automation"])
+    vars_ = cast(list[dict[str, Any]], full["vars"])
+    steps = cast(list[dict[str, Any]], full["steps"])
+
+    g: dict[str, Any] = {
+        "name": auto.get("name", name),
+        "description": auto.get("description", "") or "",
+        "created_at": auto.get("created_at"),
+        "updated_at": auto.get("updated_at"),
+        "compiled_at": auto.get("compiled_at"),
+        "compiled_hash": auto.get("compiled_hash"),
+        "vars": vars_,
+        "steps": steps,
+    }
+    return g
+
+
 # ============================================================
 # Runs (optional metadata)
 # ============================================================
+
 
 def create_run(automation_name: str, container_name: Optional[str] = None, meta_json: str = "") -> int:
     with _connect() as conn:
