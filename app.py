@@ -339,6 +339,7 @@ def start_container(name: str):
         cname = docker_name(name)
 
         environment = {
+            "AUTOMATR_CONTAINER_NAME": name,
             "AUTOMATR_CONTAINER_ROOT": CONTAINER_ROOT,
             "AUTOMATR_QUEUE_DIR": QUEUE_DIR,
             "AUTOMATR_SCREEN_W": SCREEN_W,
