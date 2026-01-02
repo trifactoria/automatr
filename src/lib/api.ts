@@ -8,6 +8,7 @@ import type {
   AutomationGraphResponse,
   SaveAutomationResponse,
   ActionsCheck,
+  ActionsSchemaResponse,
   VncInfo,
   ApiResponse,
   GraphVar,
@@ -160,5 +161,12 @@ export async function deleteAutomation(name: string): Promise<void> {
 export async function getActionsCheck(): Promise<ActionsCheck> {
   // GET /actions/check returns {ok: true, wrapper_actions: [...], ...}
   return apiGet<ActionsCheck>("/actions/check");
+}
+
+export async function getActionsSchema(): Promise<Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>> {
+  // GET /actions/schema returns {ok: true, schemas: {...}}
+  const response = await apiGet<ActionsSchemaResponse>("/actions/schema");
+  checkApiResponse(response, "Get actions schema");
+  return response.schemas;
 }
 

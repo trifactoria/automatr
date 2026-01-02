@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import type { GraphStep, StepParam } from "@/lib/types";
+import { Toggle } from "./Toggle";
 
 export function StepCard({
   step,
   stepIndex,
   availableActions,
+  actionsSchema,
   onUpdate,
   onDelete,
   onEditConditions,
@@ -14,6 +16,7 @@ export function StepCard({
   step: GraphStep;
   stepIndex: number;
   availableActions: string[];
+  actionsSchema: Record<string, { name: string; params: Array<{ key: string; type: string; default: string }> }>;
   onUpdate: (updates: Partial<GraphStep>) => void;
   onDelete: () => void;
   onEditConditions: () => void;
@@ -26,10 +29,27 @@ export function StepCard({
     onUpdate({ params: newParams });
   };
 
-  const handleAddParam = () => {
-    const newParams = [...step.params, { key: "", type: "str" as const, value: "" }];
-    onUpdate({ params: newParams });
-    setParamsExpanded(true);
+  const handleActionChange = (newAction: string) => {
+    // Get schema for the new action
+    const schema = actionsSchema[newAction];
+
+    if (schema && schema.params) {
+      // Auto-populate params from schema
+      const newParams: StepParam[] = schema.params.map((paramDef) => {
+        // Try to preserve existing value if param key matches
+        const existingParam = step.params.find((p) => p.key === paramDef.key);
+        return {
+          key: paramDef.key,
+          type: paramDef.type as "str" | "int" | "float" | "bool",
+          value: existingParam?.value ?? paramDef.default,
+        };
+      });
+      onUpdate({ action: newAction, params: newParams });
+      setParamsExpanded(true); // Expand to show auto-populated params
+    } else {
+      // No schema available, reset to empty
+      onUpdate({ action: newAction, params: [] });
+    }
   };
 
   const handleDeleteParam = (paramIndex: number) => {
@@ -51,15 +71,7 @@ export function StepCard({
           value={step.label}
           onChange={(e) => onUpdate({ label: e.target.value })}
         />
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={step.enabled === 1}
-            onChange={(e) => onUpdate({ enabled: e.target.checked ? 1 : 0 })}
-            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-          />
-          <span className="font-medium text-gray-700">Enabled</span>
-        </label>
+        <Toggle label="Enabled" checked={step.enabled === 1} onChange={(v) => onUpdate({ enabled: v ? 1 : 0 })} />
         <button
           onClick={onDelete}
           className="rounded-lg border border-red-600 bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
@@ -74,10 +86,7 @@ export function StepCard({
         <select
           className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
           value={step.action}
-          onChange={(e) => {
-            // When action changes, reset params to avoid confusion
-            onUpdate({ action: e.target.value, params: [] });
-          }}
+          onChange={(e) => handleActionChange(e.target.value)}
         >
           {availableActions.map((action) => (
             <option key={action} value={action}>
@@ -96,18 +105,17 @@ export function StepCard({
           >
             Parameters ({step.params.length}) {paramsExpanded ? "▼" : "▶"}
           </button>
-          <button
-            onClick={handleAddParam}
-            className="rounded border border-blue-600 bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700"
-          >
-            + Add Param
-          </button>
+          {!actionsSchema[step.action] && (
+            <div className="text-xs text-gray-500 italic">Schema not loaded</div>
+          )}
         </div>
 
         {paramsExpanded && (
           <div className="mt-2 space-y-2">
             {step.params.length === 0 ? (
-              <div className="text-sm text-gray-500">No parameters</div>
+              <div className="text-sm text-gray-500">
+                {actionsSchema[step.action] ? "No parameters defined for this action" : "No schema available"}
+              </div>
             ) : (
               step.params.map((param, idx) => (
                 <div key={idx} className="flex items-center gap-2 rounded border border-gray-300 bg-white p-2">
@@ -116,12 +124,16 @@ export function StepCard({
                     className="w-32 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                     placeholder="Key"
                     value={param.key}
+                    readOnly={!!actionsSchema[step.action]}
                     onChange={(e) => handleParamChange(idx, "key", e.target.value)}
+                    title={actionsSchema[step.action] ? "Key is defined by action schema" : "Parameter key"}
                   />
                   <select
                     className="w-24 rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                     value={param.type}
+                    disabled={!!actionsSchema[step.action]}
                     onChange={(e) => handleParamChange(idx, "type", e.target.value)}
+                    title={actionsSchema[step.action] ? "Type is defined by action schema" : "Parameter type"}
                   >
                     <option value="str">str</option>
                     <option value="int">int</option>
@@ -135,12 +147,14 @@ export function StepCard({
                     value={param.value}
                     onChange={(e) => handleParamChange(idx, "value", e.target.value)}
                   />
-                  <button
-                    onClick={() => handleDeleteParam(idx)}
-                    className="rounded border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
-                  >
-                    Delete
-                  </button>
+                  {!actionsSchema[step.action] && (
+                    <button
+                      onClick={() => handleDeleteParam(idx)}
+                      className="rounded border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
               ))
             )}
