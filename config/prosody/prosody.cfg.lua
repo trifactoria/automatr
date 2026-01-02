@@ -15,7 +15,6 @@ modules_enabled = {
   "dialback";
   "disco";
   "pep";
-  "bookmarks";
   "ping";
   "smacks";
   "private";
@@ -32,7 +31,7 @@ cross_domain_websocket = true
 -- If you want message carbons later: add "carbons" and the xep module.
 -- For now keep minimal.
 
-allow_registration = false
+allow_registration = true
 
 -- IMPORTANT: keep STARTTLS optional while you debug
 c2s_require_encryption = false
