@@ -14,7 +14,12 @@ import type {
   ApiResponse,
   GraphVar,
   GraphStep,
+  InputStatusResponse,
+  InputStatus,
+  InputEventsResponse,
+  InputEvent,
 } from "./types";
+import { normalizeInputStatus } from "./types";
 
 export const API_BASE = "/api";
 
@@ -186,5 +191,60 @@ export async function getActionsSchema(): Promise<Record<string, ActionDef>> {
     // Return empty object on any failure (never undefined)
     return {};
   }
+}
+
+// INPUT RECORDER
+export async function getInputStatus(container: string): Promise<InputStatus> {
+  // GET /containers/{name}/input/status
+  const response = await apiGet<InputStatusResponse>(`/containers/${encodeURIComponent(container)}/input/status`);
+  return normalizeInputStatus(response);
+}
+
+export async function startInputRecorder(container: string): Promise<void> {
+  // POST /containers/{name}/input/start
+  const response = await apiPost<ApiResponse>(`/containers/${encodeURIComponent(container)}/input/start`);
+  checkApiResponse(response, "Start input recorder");
+}
+
+export async function stopInputRecorder(container: string): Promise<void> {
+  // POST /containers/{name}/input/stop
+  const response = await apiPost<ApiResponse>(`/containers/${encodeURIComponent(container)}/input/stop`);
+  checkApiResponse(response, "Stop input recorder");
+}
+
+export async function clearInputEvents(container: string): Promise<void> {
+  // POST /containers/{name}/input/clear
+  const response = await apiPost<ApiResponse>(`/containers/${encodeURIComponent(container)}/input/clear`);
+  checkApiResponse(response, "Clear input events");
+}
+
+export async function getInputEvents(
+  container: string,
+  opts?: { tail?: number; parse?: boolean }
+): Promise<InputEvent[]> {
+  // GET /containers/{name}/input/events?tail=200&parse=1
+  const tail = opts?.tail ?? 200;
+  const parse = opts?.parse ?? true;
+  const parseParam = parse ? 1 : 0;
+
+  const response = await apiGet<InputEventsResponse>(
+    `/containers/${encodeURIComponent(container)}/input/events?tail=${tail}&parse=${parseParam}`
+  );
+
+  // If backend returns parsed events
+  if (response.events) {
+    return response.events;
+  }
+
+  // If backend returns raw lines, wrap them as events
+  if (response.lines) {
+    return response.lines.map((line) => ({
+      type: "raw",
+      data: { line },
+    }));
+  }
+
+  // No events
+  return [];
 }
 
