@@ -135,6 +135,12 @@ def input_events_log_path(name: str) -> Path:
 def input_recorder_runner_log_path(name: str) -> Path:
     return container_dir(name) / "logs" / "input_recorder_runner.log"
 
+# ---------- logs ----------
+def automation_log_path(name: str, date_ymd: str) -> Path:
+    # runner.py writes to /automatr/logs/YYYY-MM-DD.log (UTC date)
+    # host bind-mount: data/{name}/logs/YYYY-MM-DD.log
+    return container_dir(name) / "logs" / f"{date_ymd}.log"
+
 def _read_pid_file(p: Path) -> Optional[int]:
     try:
         s = p.read_text(encoding="utf-8").strip()
@@ -924,4 +930,92 @@ def input_events(name: str, tail: int = 200, parse: int = 1):
                 events.append({"_raw": ln})
 
     return {"ok": True, "lines": lines, "events": events}
+
+
+@app.get("/containers/{name}/logs/startup")
+def logs_startup(name: str, tail: int = 200, timestamps: int = 0):
+    """
+    Startup logs = docker logs for the container (works even if container is stopped).
+    """
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    try:
+        tail_i = int(tail)
+    except Exception:
+        return {"ok": False, "error": "bad_tail"}
+
+    if tail_i <= 0:
+        return {"ok": False, "error": "bad_tail"}
+
+    # Cap to prevent huge responses
+    if tail_i > 5000:
+        tail_i = 5000
+
+    cname = docker_name(name)
+
+    try:
+        c = docker_client.containers.get(cname)
+    except NotFound:
+        # DB says container exists but docker container missing
+        return {"ok": False, "error": "docker_not_found"}
+    except Exception as e:
+        return {"ok": False, "error": "docker_error", "detail": str(e)}
+
+    try:
+        # docker-py: timestamps=True prefixes each line with timestamp
+        use_ts = int(timestamps) == 1
+        raw = c.logs(tail=tail_i, timestamps=use_ts)
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        lines = text.splitlines()
+        return {"ok": True, "container": name, "tail": tail_i, "timestamps": use_ts, "lines": lines}
+    except Exception as e:
+        return {"ok": False, "error": "logs_failed", "detail": str(e)}
+
+
+@app.get("/containers/{name}/logs/automation")
+def logs_automation(name: str, date: str | None = None, tail: int = 400):
+    """
+    Automation logs = runner-produced file in bind-mounted host data dir:
+      data/{name}/logs/YYYY-MM-DD.log
+    Date is UTC (runner uses UTC in filenames).
+    """
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    try:
+        tail_i = int(tail)
+    except Exception:
+        return {"ok": False, "error": "bad_tail"}
+
+    if tail_i <= 0:
+        return {"ok": False, "error": "bad_tail"}
+
+    if tail_i > 5000:
+        tail_i = 5000
+
+    # Default date is today UTC (matches runner.py naming)
+    if not date:
+        date_ymd = datetime.utcnow().strftime("%Y-%m-%d")
+    else:
+        date_ymd = str(date).strip()
+        # Validate YYYY-MM-DD
+        try:
+            datetime.strptime(date_ymd, "%Y-%m-%d")
+        except Exception:
+            return {"ok": False, "error": "bad_date", "detail": "expected YYYY-MM-DD"}
+
+    ensure_container_fs(name)
+
+    p = automation_log_path(name, date_ymd)
+    lines = _tail_lines(p, tail_i)
+
+    return {
+        "ok": True,
+        "container": name,
+        "date": date_ymd,
+        "tail": tail_i,
+        "path": str(p),
+        "lines": lines,
+    }
 

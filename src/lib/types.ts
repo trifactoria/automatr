@@ -100,6 +100,62 @@ export type ActionsSchemaResponse = {
   schema: Record<string, ActionDef> | ActionDef[];
 };
 
+// Input Recorder Types
+export type InputStatus = {
+  running: boolean;
+  pid?: number | null;
+  log_path?: string;
+  runner_log_path?: string;
+};
+
+export type InputStatusResponse = {
+  ok: boolean;
+  status?: InputStatus;
+  running?: boolean;
+  pid?: number | null;
+  log_path?: string;
+  runner_log_path?: string;
+};
+
+export type InputEvent = {
+  timestamp?: string;
+  type: string;
+  data: Record<string, any>;
+};
+
+export type InputEventsResponse = {
+  ok: boolean;
+  lines?: string[];
+  events?: InputEvent[];
+};
+
+// Helper to normalize InputStatusResponse into InputStatus
+export function normalizeInputStatus(resp: InputStatusResponse): InputStatus {
+  // If backend returns nested status object
+  if (resp.status) {
+    return resp.status;
+  }
+  // If backend returns flat structure
+  return {
+    running: resp.running ?? false,
+    pid: resp.pid,
+    log_path: resp.log_path,
+    runner_log_path: resp.runner_log_path,
+  };
+}
+
+// Logs
+export type LogsLinesResponse = { ok: true; container: string; tail: number; lines: string[] } | ApiErrorResponse;
+
+export type StartupLogsResponse =
+  | ({ ok: true; container: string; tail: number; timestamps: boolean; lines: string[] })
+  | ApiErrorResponse;
+
+export type AutomationLogsResponse =
+  | ({ ok: true; container: string; date: string; tail: number; path: string; lines: string[] })
+  | ApiErrorResponse;
+
+
 // API Response Envelopes
 export type ApiOkResponse<T = any> = { ok: true } & T;
 export type ApiErrorResponse = { ok: false; error: string; detail?: string };

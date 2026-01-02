@@ -1,19 +1,23 @@
 "use client";
 
 import * as React from "react";
-import type { StepClause } from "@/lib/types";
+import type { StepClause, GraphVar } from "@/lib/types";
 import { Modal } from "./Modal";
 
 export function ConditionsModal({
   open,
   clauses,
+  vars,
   onClose,
   onSave,
+  onUpdateVars,
 }: {
   open: boolean;
   clauses: StepClause[];
+  vars: GraphVar[];
   onClose: () => void;
   onSave: (clauses: StepClause[]) => void;
+  onUpdateVars: (vars: GraphVar[]) => void;
 }) {
   const [localClauses, setLocalClauses] = React.useState<StepClause[]>(clauses);
 
@@ -52,6 +56,40 @@ export function ConditionsModal({
     const newClauses = [...localClauses];
     [newClauses[index], newClauses[index + 1]] = [newClauses[index + 1], newClauses[index]];
     setLocalClauses(newClauses);
+  };
+
+  // Handle var selection for LHS/RHS
+  const handleSelectVar = (clauseIndex: number, side: "lhs" | "rhs", varKey: string) => {
+    const selectedVar = vars.find((v) => v.key === varKey);
+    if (!selectedVar) return;
+
+    if (side === "lhs") {
+      handleUpdateClause(clauseIndex, {
+        lhs_value: selectedVar.key,
+        lhs_type: selectedVar.type,
+      });
+    } else {
+      handleUpdateClause(clauseIndex, {
+        rhs_value: selectedVar.key,
+        rhs_type: selectedVar.type,
+      });
+    }
+  };
+
+  // Handle var value change
+  const handleUpdateVarValue = (varKey: string, newValue: string) => {
+    const varIndex = vars.findIndex((v) => v.key === varKey);
+    if (varIndex === -1) return;
+
+    const newVars = [...vars];
+    newVars[varIndex] = { ...newVars[varIndex], value: newValue };
+    onUpdateVars(newVars);
+  };
+
+  // Get var by key
+  const getVar = (key: string | null | undefined): GraphVar | undefined => {
+    if (!key) return undefined;
+    return vars.find((v) => v.key === key);
   };
 
   // Validate clause ordering
@@ -165,24 +203,54 @@ export function ConditionsModal({
                         <option value="var">var</option>
                         <option value="literal">literal</option>
                       </select>
-                      <select
-                        className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-                        value={clause.lhs_type ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { lhs_type: (e.target.value || null) as any })}
-                      >
-                        <option value="">—</option>
-                        <option value="str">str</option>
-                        <option value="int">int</option>
-                        <option value="float">float</option>
-                        <option value="bool">bool</option>
-                      </select>
-                      <input
-                        type="text"
-                        className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-                        placeholder="value"
-                        value={clause.lhs_value ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { lhs_value: e.target.value || null })}
-                      />
+
+                      {/* Var selection dropdown or type select */}
+                      {clause.lhs_kind === "var" ? (
+                        <>
+                          <select
+                            className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                            value={clause.lhs_value ?? ""}
+                            onChange={(e) => handleSelectVar(idx, "lhs", e.target.value)}
+                          >
+                            <option value="">Select var...</option>
+                            {vars.map((v) => (
+                              <option key={v.key} value={v.key}>
+                                {v.key} {v.type}
+                              </option>
+                            ))}
+                          </select>
+                          {clause.lhs_value && getVar(clause.lhs_value) && (
+                            <input
+                              type="text"
+                              className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                              placeholder="var value"
+                              value={getVar(clause.lhs_value)?.value ?? ""}
+                              onChange={(e) => handleUpdateVarValue(clause.lhs_value!, e.target.value)}
+                            />
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <select
+                            className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                            value={clause.lhs_type ?? ""}
+                            onChange={(e) => handleUpdateClause(idx, { lhs_type: (e.target.value || null) as any })}
+                          >
+                            <option value="">—</option>
+                            <option value="str">str</option>
+                            <option value="int">int</option>
+                            <option value="float">float</option>
+                            <option value="bool">bool</option>
+                          </select>
+                          <input
+                            type="text"
+                            className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                            placeholder="value"
+                            value={clause.lhs_value ?? ""}
+                            onChange={(e) => handleUpdateClause(idx, { lhs_value: e.target.value || null })}
+                          />
+                        </>
+                      )}
                     </div>
 
                     {/* Operator */}
@@ -218,24 +286,54 @@ export function ConditionsModal({
                         <option value="var">var</option>
                         <option value="literal">literal</option>
                       </select>
-                      <select
-                        className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-                        value={clause.rhs_type ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { rhs_type: (e.target.value || null) as any })}
-                      >
-                        <option value="">—</option>
-                        <option value="str">str</option>
-                        <option value="int">int</option>
-                        <option value="float">float</option>
-                        <option value="bool">bool</option>
-                      </select>
-                      <input
-                        type="text"
-                        className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
-                        placeholder="value"
-                        value={clause.rhs_value ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { rhs_value: e.target.value || null })}
-                      />
+
+                      {/* Var selection dropdown or type select */}
+                      {clause.rhs_kind === "var" ? (
+                        <>
+                          <select
+                            className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                            value={clause.rhs_value ?? ""}
+                            onChange={(e) => handleSelectVar(idx, "rhs", e.target.value)}
+                          >
+                            <option value="">Select var...</option>
+                            {vars.map((v) => (
+                              <option key={v.key} value={v.key}>
+                                {v.key} {v.type}
+                              </option>
+                            ))}
+                          </select>
+                          {clause.rhs_value && getVar(clause.rhs_value) && (
+                            <input
+                              type="text"
+                              className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                              placeholder="var value"
+                              value={getVar(clause.rhs_value)?.value ?? ""}
+                              onChange={(e) => handleUpdateVarValue(clause.rhs_value!, e.target.value)}
+                            />
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <select
+                            className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                            value={clause.rhs_type ?? ""}
+                            onChange={(e) => handleUpdateClause(idx, { rhs_type: (e.target.value || null) as any })}
+                          >
+                            <option value="">—</option>
+                            <option value="str">str</option>
+                            <option value="int">int</option>
+                            <option value="float">float</option>
+                            <option value="bool">bool</option>
+                          </select>
+                          <input
+                            type="text"
+                            className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
+                            placeholder="value"
+                            value={clause.rhs_value ?? ""}
+                            onChange={(e) => handleUpdateClause(idx, { rhs_value: e.target.value || null })}
+                          />
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
