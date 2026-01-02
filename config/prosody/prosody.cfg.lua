@@ -19,6 +19,9 @@ modules_enabled = {
   "ping";
   "smacks";
   "private";
+  "websocket";
+  "http";
+  "bosh";
 }
 
 c2s_timeout = 300
