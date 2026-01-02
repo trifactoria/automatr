@@ -16,7 +16,7 @@ import type {
   GraphStep,
 } from "./types";
 
-export const API_BASE = "http://127.0.0.1:8766";
+export const API_BASE = "/api";
 
 async function readErr(res: Response): Promise<string> {
   try {

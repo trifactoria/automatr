@@ -125,6 +125,65 @@ def metadata_path(name: str) -> Path:
     return BIN_CONTAINERS_DIR / name / "metadata.json"
 
 
+# ---------- input recorder (host-managed) ----------
+def input_recorder_pid_path(name: str) -> Path:
+    return container_dir(name) / "pid" / "input_recorder.pid"
+
+def input_events_log_path(name: str) -> Path:
+    return container_dir(name) / "logs" / "input_events.jsonl"
+
+def input_recorder_runner_log_path(name: str) -> Path:
+    return container_dir(name) / "logs" / "input_recorder_runner.log"
+
+def _read_pid_file(p: Path) -> Optional[int]:
+    try:
+        s = p.read_text(encoding="utf-8").strip()
+        if not s:
+            return None
+        return int(s)
+    except Exception:
+        return None
+
+def _recorder_is_running(name: str) -> tuple[bool, Optional[int]]:
+    """
+    Returns (running, pid). If pidfile exists but process is dead, we clean it up.
+    """
+    pidfile = input_recorder_pid_path(name)
+    pid = _read_pid_file(pidfile)
+    if pid is None:
+        return False, None
+
+    if not is_container_running(name):
+        # container down => recorder not running; keep pidfile? better to remove stale
+        try:
+            pidfile.unlink()
+        except Exception:
+            pass
+        return False, None
+
+    # check inside container if pid exists
+    cname = docker_name(name)
+    rc, _out = docker_exec(cname, ["sh", "-lc", f"kill -0 {pid} >/dev/null 2>&1"], timeout=2)
+    if rc == 0:
+        return True, pid
+
+    # stale pidfile -> cleanup
+    try:
+        pidfile.unlink()
+    except Exception:
+        pass
+    return False, None
+
+def _tail_lines(p: Path, n: int) -> list[str]:
+    if n <= 0:
+        return []
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        return lines[-n:]
+    except FileNotFoundError:
+        return []
+
+
 def read_container_description(name: str) -> str:
     """
     Container description is sourced from bin/containers/{name}/metadata.json.
@@ -540,7 +599,7 @@ def container_vnc_url(name: str):
     if not is_container_running(name):
         return {"ok": False, "error": "not_running"}
     novnc_port = _RUNTIME[name]["novnc_port"]
-    url = f"http://127.0.0.1:{novnc_port}{NOVNC_PATH}"
+    url = f"http://{AUTOMATR_HOST}:{novnc_port}{NOVNC_PATH}"
     return {"url": url, "view_only": True}
 
 
@@ -733,7 +792,7 @@ def get_container(name: str):
     vnc_url = None
     if running and name in _RUNTIME and _RUNTIME[name].get("novnc_port"):
         novnc_port = _RUNTIME[name]["novnc_port"]
-        vnc_url = f"http://127.0.0.1:{novnc_port}{NOVNC_PATH}"
+        vnc_url = f"http://{AUTOMATR_HOST}:{novnc_port}{NOVNC_PATH}"
 
     # Optional: include run.lock contents if present
     run_lock_data = None
@@ -757,4 +816,112 @@ def get_container(name: str):
             "run_lock": run_lock_data,
         },
     }
+
+
+@app.get("/containers/{name}/input/status")
+def input_status(name: str):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    running, pid = _recorder_is_running(name)
+    return {
+        "ok": True,
+        "status": {
+            "running": running,
+            "pid": pid,
+            "log_path": str(input_events_log_path(name)),
+            "runner_log_path": str(input_recorder_runner_log_path(name)),
+        },
+    }
+
+
+@app.post("/containers/{name}/input/start")
+def input_start(name: str):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+    if not is_container_running(name):
+        return {"ok": False, "error": "not_running"}
+
+    ensure_container_fs(name)
+
+    running, pid = _recorder_is_running(name)
+    if running:
+        return {"ok": True, "running": True, "pid": pid}
+
+    cname = docker_name(name)
+
+    # Start recorder in background, record pid.
+    # Note: we rely on the recorder writing to /automatr/logs/input_events.jsonl itself.
+    cmd = (
+        "mkdir -p /automatr/pid /automatr/logs; "
+        "nohup /usr/bin/automatr-input-recorder "
+        ">>/automatr/logs/input_recorder_runner.log 2>&1 "
+        "& echo $! > /automatr/pid/input_recorder.pid"
+    )
+    rc, out = docker_exec(cname, ["sh", "-lc", cmd], timeout=3)
+    if rc != 0:
+        return {"ok": False, "error": "start_failed", "detail": out}
+
+    # Verify
+    running, pid = _recorder_is_running(name)
+    return {"ok": True, "running": running, "pid": pid}
+
+
+@app.post("/containers/{name}/input/stop")
+def input_stop(name: str):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    running, pid = _recorder_is_running(name)
+    if not running or not pid:
+        return {"ok": True, "stopped": True, "pid": pid}
+
+    cname = docker_name(name)
+
+    # Try TERM, then KILL
+    docker_exec(cname, ["sh", "-lc", f"kill -TERM {pid} >/dev/null 2>&1 || true"], timeout=2)
+    time.sleep(0.1)
+    docker_exec(cname, ["sh", "-lc", f"kill -KILL {pid} >/dev/null 2>&1 || true"], timeout=2)
+
+    # Remove pidfile on host (bind-mounted)
+    try:
+        input_recorder_pid_path(name).unlink()
+    except Exception:
+        pass
+
+    return {"ok": True, "stopped": True, "pid": pid}
+
+
+@app.post("/containers/{name}/input/clear")
+def input_clear(name: str):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+    ensure_container_fs(name)
+
+    p = input_events_log_path(name)
+    try:
+        p.write_text("", encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "error": "clear_failed", "detail": str(e)}
+    return {"ok": True}
+
+
+@app.get("/containers/{name}/input/events")
+def input_events(name: str, tail: int = 200, parse: int = 1):
+    if not db.container_exists(name):
+        return {"ok": False, "error": "not_found"}
+
+    p = input_events_log_path(name)
+    lines = _tail_lines(p, int(tail))
+
+    # Optional: return parsed JSON too
+    events = []
+    if int(parse) == 1:
+        for ln in lines:
+            try:
+                events.append(json.loads(ln))
+            except Exception:
+                events.append({"_raw": ln})
+
+    return {"ok": True, "lines": lines, "events": events}
 
