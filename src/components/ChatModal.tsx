@@ -32,7 +32,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [inputValue, setInputValue] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentNick, setCurrentNick] = useState<string>("user-" + Math.random().toString(36).substr(2, 9));
+  const [currentNick, setCurrentNick] = useState<string>(process.env.NEXT_PUBLIC_XMPP_NICK || "andy");
 
   const connectionRef = useRef<any>(null);
   const StropheRef = useRef<any>(null);
@@ -96,13 +96,14 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
         };
 
         // Connect to XMPP server
-        // For demo purposes, using anonymous auth. In production, use real credentials.
-        const jid = `${currentNick}@${XMPP_CONFIG.domain}`;
-        const password = ""; // Anonymous or use real password
+        // IMPORTANT: JID is the ACCOUNT. The random string is only your MUC nick.
+        const jid = `${XMPP_CONFIG.username}@${XMPP_CONFIG.domain}`;
+        const password = XMPP_CONFIG.password;
 
-        console.log("[XMPP] Connecting to", service, "as", jid);
+        console.log("[XMPP] Connecting to", service, "as", jid, "nick:", currentNick);
         connection.connect(jid, password, onConnect);
-      })
+
+        })
       .catch((err) => {
         console.error("[XMPP] Failed to load Strophe.js:", err);
         setError("Failed to load chat library");
