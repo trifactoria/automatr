@@ -41,7 +41,14 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   const roomJoinAttemptRef = useRef(0);
   const handlersInstalledRef = useRef(false);
 
+  // Keep a ref in sync so timeouts/handlers don't read stale "joined"
+  const joinedRef = useRef(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    joinedRef.current = joined;
+  }, [joined]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -50,64 +57,53 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   const roomBareJid = () => `${XMPP_CONFIG.defaultRoom}@${XMPP_CONFIG.mucDomain}`;
 
   function hasWebCryptoDeriveBits(): boolean {
-    const subtle = (globalThis as any)?.crypto?.subtle;
-    return !!subtle && typeof subtle.deriveBits === "function";
+    try {
+      const c: any = (globalThis as any)?.crypto;
+      const subtle: any = c?.subtle;
+      return !!subtle && typeof subtle.deriveBits === "function";
+    } catch {
+      return false;
+    }
   }
 
-  function forcePlainAuthHard(connection: any, Strophe: any) {
-    // If WebCrypto exists, SCRAM is safe and we do nothing.
+  /**
+   * If WebCrypto isn't available, Strophe's SCRAM implementation will crash
+   * trying to call crypto.subtle.deriveBits(). Disable SCRAM up-front so SASL
+   * falls back to PLAIN.
+   */
+  function disableScramMechanismsIfNoWebCrypto(Strophe: any) {
     if (hasWebCryptoDeriveBits()) return;
 
-    console.warn("[XMPP] crypto.subtle missing; forcing PLAIN-only SASL");
+    console.warn("[XMPP] crypto.subtle missing; disabling SCRAM SASL mechanisms (forcing PLAIN)");
 
-    // 1) Disable known SCRAM mechanisms if API exists (older builds)
     try {
-      if (typeof connection.deleteMechanism === "function") {
-        connection.deleteMechanism("SCRAM-SHA-1");
-        connection.deleteMechanism("SCRAM-SHA-256");
-        connection.deleteMechanism("SCRAM-SHA-512");
-      }
-    } catch {}
+      const registry = (Strophe as any)?.SASLMechanisms;
+      if (registry && typeof registry === "object") {
+        delete registry["SCRAM-SHA-1"];
+        delete registry["SCRAM-SHA-1-PLUS"];
+        delete registry["SCRAM-SHA-256"];
+        delete registry["SCRAM-SHA-256-PLUS"];
+        delete registry["SCRAM-SHA-512"];
+        delete registry["SCRAM-SHA-512-PLUS"];
 
-    // 2) HARD OVERRIDE for strophe.browser.esm.js builds:
-    // Replace connection.mechanisms so SASL selection cannot choose SCRAM.
-    try {
-      const plain =
-        (Strophe as any)?.SASLPlain ||
-        (Strophe as any)?.SASLMechanisms?.PLAIN ||
-        null;
-
-      if (!plain) {
-        console.warn("[XMPP] Could not locate SASLPlain in Strophe build; auth may still fail.");
-        return;
-      }
-
-      // Many builds store mechanisms here:
-      connection.mechanisms = {
-        PLAIN: plain,
-      };
-
-      // Some builds also track auth mechanisms list internally:
-      if (Array.isArray((connection as any)._sasl_mechanisms)) {
-        (connection as any)._sasl_mechanisms = ["PLAIN"];
-      }
-
-      // If there is a preferred list, set it:
-      (connection as any).preferredSaslMechanism = "PLAIN";
-    } catch (e) {
-      console.warn("[XMPP] Failed to hard-force PLAIN mechanisms (ignored)", e);
-    }
-
-    // 3) Also scrub global registry just in case
-    try {
-      const mechs = (Strophe as any).SASLMechanisms;
-      if (mechs) {
-        for (const key of Object.keys(mechs)) {
-          if (key.toUpperCase().includes("SCRAM")) delete mechs[key];
+        // Be aggressive for variants
+        for (const k of Object.keys(registry)) {
+          if (k.toUpperCase().includes("SCRAM")) delete registry[k];
         }
       }
-    } catch {}
+    } catch (e) {
+      console.warn("[XMPP] Failed to prune Strophe.SASLMechanisms (ignored)", e);
+    }
   }
+
+  const confirmJoinedOnce = () => {
+    if (joinedRef.current) return;
+    console.log("[MUC] Join confirmed");
+    setJoined(true);
+
+    const queued = pendingSendsRef.current.splice(0);
+    queued.forEach((text) => sendGroupchat(text));
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -119,6 +115,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     setOccupants([]);
     setRooms([XMPP_CONFIG.defaultRoom]);
     setJoined(false);
+    joinedRef.current = false;
 
     pendingSendsRef.current = [];
     roomJoinAttemptRef.current = 0;
@@ -132,12 +129,16 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
         if (!Strophe) throw new Error("strophe.js did not export Strophe");
         StropheRef.current = Strophe;
 
+        // IMPORTANT: do this BEFORE creating the connection
+        disableScramMechanismsIfNoWebCrypto(Strophe);
+
         const service = XMPP_CONFIG.useWebSocket ? XMPP_CONFIG.websocketUrl : XMPP_CONFIG.boshUrl;
+
+        console.log("[XMPP] service=", service);
+        console.log("[XMPP] jid=", `${XMPP_CONFIG.username}@${XMPP_CONFIG.domain}`);
+        console.log("[XMPP] webcrypto=", hasWebCryptoDeriveBits());
+
         const connection = new Strophe.Connection(service);
-
-        // MUST happen before connect()
-        forcePlainAuthHard(connection, Strophe);
-
         connectionRef.current = connection;
 
         const jid = `${XMPP_CONFIG.username}@${XMPP_CONFIG.domain}`;
@@ -158,14 +159,16 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                 setError(null);
 
                 setJoined(false);
+                joinedRef.current = false;
+
                 pendingSendsRef.current = [];
                 roomJoinAttemptRef.current = 0;
                 handlersInstalledRef.current = false;
 
                 console.log("[XMPP] Connected");
 
+                // Initial presence + then MUC discovery/join
                 connection.send(new Strophe.Builder("presence").tree());
-
                 discoverRooms(connection, Strophe);
                 joinRoom(connection, Strophe);
                 break;
@@ -173,6 +176,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
               case Status.DISCONNECTED:
                 setConnectionState("disconnected");
                 setJoined(false);
+                joinedRef.current = false;
                 console.log("[XMPP] Disconnected");
                 break;
 
@@ -181,6 +185,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
               case Status.AUTHFAIL:
                 setConnectionState("error");
                 setJoined(false);
+                joinedRef.current = false;
                 setError("Failed to connect to XMPP server. Check your credentials and server settings.");
                 console.error("[XMPP] Connection error");
                 break;
@@ -194,9 +199,6 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
             setError("XMPP connect callback crashed (see console).");
           }
         };
-
-        console.log("[XMPP] service=", service);
-        console.log("[XMPP] jid=", jid, "nick=", currentNick, "webcrypto=", hasWebCryptoDeriveBits());
 
         connection.connect(jid, password, onConnect);
       })
@@ -266,6 +268,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     const roomJid = roomBareJid();
 
+    // Messages: safe to filter to the room
     connection.addHandler(
       (stanza: Element) => onMessage(stanza, Strophe),
       null,
@@ -276,15 +279,9 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
       { matchBare: true }
     );
 
-    connection.addHandler(
-      (stanza: Element) => onPresence(stanza, Strophe),
-      null,
-      "presence",
-      null,
-      null,
-      roomJid,
-      { matchBare: true }
-    );
+    // Presence: DO NOT filter by `from` at handler layer (it is unreliable for MUC presence).
+    // Filter inside onPresence.
+    connection.addHandler((stanza: Element) => onPresence(stanza, Strophe), null, "presence", null, null, null);
   };
 
   const joinRoom = (connection: any, Strophe: any) => {
@@ -308,7 +305,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     setTimeout(() => {
       if (!connectionRef.current?.connected) return;
-      if (!joined && attempt === roomJoinAttemptRef.current) {
+      if (!joinedRef.current && attempt === roomJoinAttemptRef.current) {
         console.warn("[MUC] join not confirmed yet; retrying join");
         const retry = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
           .c("x", { xmlns: Strophe.NS.MUC })
@@ -379,46 +376,46 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   };
 
   const onPresence = (stanza: Element, Strophe: any) => {
-    const from = stanza.getAttribute("from");
-    const type = stanza.getAttribute("type");
-    if (!from) return true;
+    const from = stanza.getAttribute("from") || "";
+    const type = stanza.getAttribute("type") || ""; // "" means available
+
+    // Only care about presence for our room
+    const roomJid = roomBareJid();
+    const bareFrom = Strophe.getBareJidFromJid(from);
+    if (bareFrom !== roomJid) return true;
 
     const nick = Strophe.getResourceFromJid(from);
     if (!nick) return true;
 
     const online = type !== "unavailable";
-    const bareFrom = Strophe.getBareJidFromJid(from);
-    const roomJid = roomBareJid();
 
-    if (bareFrom !== roomJid) return true;
-
+    // Join confirmation:
+    // Prefer self-presence code 110, but also treat any available self presence
+    // as confirmed (fallback for servers/clients that omit 110).
     if (nick === currentNick && online) {
-      const x = stanza.getElementsByTagNameNS("http://jabber.org/protocol/muc#user", "x")[0];
-      if (x) {
-        const statuses = x.getElementsByTagName("status");
-        for (let i = 0; i < statuses.length; i++) {
-          const code = statuses[i].getAttribute("code");
-          if (code === "110") {
-            if (!joined) {
-              console.log("[MUC] Join confirmed (self-presence 110)");
-              setJoined(true);
+      let confirmed = false;
 
-              const queued = pendingSendsRef.current.splice(0);
-              queued.forEach((text) => sendGroupchat(text));
-            }
+      const xUser = stanza.getElementsByTagNameNS("http://jabber.org/protocol/muc#user", "x")[0];
+      if (xUser) {
+        const statuses = xUser.getElementsByTagName("status");
+        for (let i = 0; i < statuses.length; i++) {
+          if (statuses[i].getAttribute("code") === "110") {
+            confirmed = true;
             break;
           }
         }
       }
+
+      // fallback: if we got our own available presence stanza, we're joined
+      if (!confirmed) confirmed = true;
+
+      if (confirmed) confirmJoinedOnce();
     }
 
     setOccupants((prev) => {
       const map = new Map(prev.map((o) => [o.nick, o]));
-      if (!online) {
-        map.delete(nick);
-      } else {
-        map.set(nick, { nick, online: true });
-      }
+      if (!online) map.delete(nick);
+      else map.set(nick, { nick, online: true });
       return Array.from(map.values()).sort((a, b) => {
         const aAgent = a.nick.startsWith("agent-") ? 0 : 1;
         const bAgent = b.nick.startsWith("agent-") ? 0 : 1;
@@ -436,7 +433,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     if (connectionState !== "connected" || !connectionRef.current?.connected) return;
 
-    if (!joined) {
+    if (!joinedRef.current) {
       pendingSendsRef.current.push(text);
       setInputValue("");
       console.warn("[MUC] Not joined yet; queued message");
@@ -476,9 +473,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
           <div className="flex-1 overflow-y-auto p-2">
             <div className="mb-2 px-2 text-xs font-semibold uppercase text-gray-600">Active</div>
 
-            <div className="mb-2 rounded bg-blue-100 px-3 py-2 text-sm text-blue-900">
-              # {XMPP_CONFIG.defaultRoom}
-            </div>
+            <div className="mb-2 rounded bg-blue-100 px-3 py-2 text-sm text-blue-900"># {XMPP_CONFIG.defaultRoom}</div>
 
             {rooms.length > 1 && (
               <>
@@ -501,7 +496,10 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
             ) : (
               <div className="space-y-1">
                 {occupants.map((o) => (
-                  <div key={o.nick} className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm text-gray-900">
+                  <div
+                    key={o.nick}
+                    className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm text-gray-900"
+                  >
                     <div className="h-2 w-2 rounded-full bg-green-500" />
                     <span className="truncate">{o.nick}</span>
                   </div>
@@ -569,10 +567,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
             ) : (
               <div className="space-y-3">
                 {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex items-start gap-2 ${msg.isOwnMessage ? "flex-row-reverse" : ""}`}
-                  >
+                  <div key={msg.id} className={`flex items-start gap-2 ${msg.isOwnMessage ? "flex-row-reverse" : ""}`}>
                     <div
                       className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-xs font-medium text-white ${
                         msg.isOwnMessage ? "bg-blue-600" : "bg-gray-600"

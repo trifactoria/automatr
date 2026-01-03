@@ -9,6 +9,7 @@ from typing import Callable, Optional
 
 # These mirror your runner conventions (and work even if runner isn't imported).
 AUTOMATR_ROOT = Path(os.getenv("AUTOMATR_CONTAINER_ROOT", "/automatr"))
+AUTOMATR_HOST = Path(os.getenv("AUTOMATR_HOST", "xps"))
 LOGS_DIR = AUTOMATR_ROOT / "logs"
 RUN_LOCK = AUTOMATR_ROOT / "run.lock"
 STOP_FILE = AUTOMATR_ROOT / "STOP"

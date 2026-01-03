@@ -16,7 +16,9 @@ type XmppConfig = {
 };
 
 const defaultHost =
-  typeof window !== "undefined" ? window.location.hostname : "xps";
+  typeof window !== "undefined" ? window.location.hostname : "xps.local";
+
+const defaultDomain = defaultHost.includes(".") ? defaultHost : `${defaultHost}.local`;
 
 // Optional explicit overrides
 const envWs = process.env.NEXT_PUBLIC_XMPP_WEBSOCKET_URL;
@@ -32,10 +34,10 @@ export const XMPP_CONFIG: XmppConfig = {
   // ✅ Fix default mismatch:
   // If you opened the UI at http://xps:3000, default domain becomes "xps"
   // unless NEXT_PUBLIC_XMPP_DOMAIN is explicitly set.
-  domain: envDomain || defaultHost,
+  domain: envDomain || defaultDomain,
 
   // MUC domain defaults to conference.<domain> (again: no mismatch)
-  mucDomain: envMucDomain || `conference.${envDomain || defaultHost}`,
+  mucDomain: envMucDomain || `conference.${envDomain || defaultDomain}`,
 
   // Default room to auto-join
   defaultRoom: process.env.NEXT_PUBLIC_XMPP_DEFAULT_ROOM || "automatr",
@@ -44,7 +46,7 @@ export const XMPP_CONFIG: XmppConfig = {
   useWebSocket: true,
 
   // “Just make it work” creds (override via NEXT_PUBLIC_*)
-  username: process.env.NEXT_PUBLIC_XMPP_USERNAME || "cli",
+  username: process.env.NEXT_PUBLIC_XMPP_USERNAME || "web",
   password: process.env.NEXT_PUBLIC_XMPP_PASSWORD || "supersecret",
 };
 
