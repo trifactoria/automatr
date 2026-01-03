@@ -9,13 +9,24 @@ set -euo pipefail
 NAME="${1:-img-$(date +%Y%m%d-%H%M%S)}"
 IMAGE="${2:-${AUTOMATR_RUNTIME_IMAGE:-automatr-runtime:dev}}"
 
+# Network to use (prefer your repo env var; fallback to older DOCKER_NETWORK)
+NET="${AUTOMATR_DOCKER_NETWORK:-${DOCKER_NETWORK:-automatr-net}}"
+
 SEQ_GID="$(stat -c %g /dev/snd/seq)"
 
 # mount root per your contract
 mkdir -p "$PWD/data/$NAME"
 
+# If .env exists, pass it through so agent_bot gets the same XMPP/API settings even
+# when you start containers manually.
+ENV_FILE_ARGS=()
+if [[ -f ".env" ]]; then
+  ENV_FILE_ARGS+=(--env-file .env)
+fi
+
 docker run --rm -it \
-  --network "${DOCKER_NETWORK:-automatr-net}" \
+  --network "$NET" \
+  "${ENV_FILE_ARGS[@]}" \
   --device /dev/snd/seq \
   --group-add "$SEQ_GID" \
   -e "AUTOMATR_NODE=$NAME" \
