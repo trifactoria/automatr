@@ -24,12 +24,10 @@ def env(name: str, default: str | None = None) -> str:
 
 
 def derive_node_name() -> str:
-    # Host injects AUTOMATR_NODE=name (e.g. "tests")
     node = (os.getenv("AUTOMATR_NODE") or os.getenv("AUTOMATR_CONTAINER_NAME") or "").strip()
     if node:
         return node
 
-    # fallback: hostname, stripping "automatr-" prefix if present
     hn = (os.getenv("HOSTNAME") or socket.gethostname() or "agent").strip()
     if hn.startswith("automatr-"):
         hn = hn[len("automatr-") :]
@@ -37,7 +35,6 @@ def derive_node_name() -> str:
 
 
 def derive_nick(node: str) -> str:
-    # Required convention: agent-<container human name>
     return f"agent-{node}"
 
 
@@ -90,13 +87,16 @@ def make_ssl_context(insecure: bool) -> ssl.SSLContext:
 
 class AgentBot(slixmpp.ClientXMPP):
     def __init__(self, cfg: Cfg):
-        # IMPORTANT: unique identity per container (jid=user@domain) where user == nick
         jid = f"{cfg.nick}@{cfg.domain}"
         super().__init__(jid, cfg.password)
 
         self.cfg = cfg
         self._ready = asyncio.Event()
         self._recent: dict[tuple[str, str, str], float] = {}
+
+        # Prevent infinite register loops on bad creds / server behavior
+        self._register_attempted = False
+        self._reconnect_after_register = False
 
         # XML-first on 5222; STARTTLS allowed
         self.use_ssl = False
@@ -109,7 +109,7 @@ class AgentBot(slixmpp.ClientXMPP):
         self.register_plugin("xep_0199")  # ping
         self.register_plugin("xep_0045")  # muc
 
-        # In-band registration (XEP-0077) — this is what you’re missing right now
+        # In-band registration (XEP-0077)
         self.register_plugin("xep_0077")
         self.add_event_handler("register", self.on_register)
 
@@ -117,28 +117,53 @@ class AgentBot(slixmpp.ClientXMPP):
         self.add_event_handler("session_start", self.on_session_start)
         self.add_event_handler("connection_failed", self.on_connection_failed)
         self.add_event_handler("disconnected", self.on_disconnected)
+        self.add_event_handler("failed_auth", self.on_failed_auth)
 
         # Messages
         self.add_event_handler("message", self.on_message)
         self.add_event_handler("groupchat_message", self.on_message)
         self.add_event_handler("chat_message", self.on_message)
 
+    async def on_failed_auth(self, _event):
+        # This fires when auth fails and no successful method is found.
+        # If the server supports in-band registration, slixmpp will ALSO trigger "register".
+        logging.warning("auth failed for %s (user=%s). may attempt in-band registration if available.",
+                        self.boundjid.bare, self.boundjid.user)
+
     async def on_register(self, _iq):
         """
-        Called when server supports in-band registration and the account isn’t authorized.
-        We register username==jid user (agent-tests) and password from env.
+        Triggered when server advertises in-band registration and the current JID is not authorized.
+        We attempt to create the account ONCE per boot.
+        If it succeeds, we disconnect and reconnect (clean auth path).
         """
+        if self._register_attempted:
+            logging.error("in-band registration already attempted once; refusing to loop for %s", self.boundjid.bare)
+            self.disconnect()
+            return
+
+        self._register_attempted = True
+
         logging.warning("in-band registration: attempting for %s", self.boundjid.bare)
         try:
             iq = self.Iq()
             iq["type"] = "set"
             iq["register"]["username"] = self.boundjid.user
             iq["register"]["password"] = self.cfg.password
+
+            # Some servers require a data form; Prosody accepts username/password.
             await iq.send()
+
             logging.warning("in-band registration: success for %s", self.boundjid.bare)
-        except Exception:
-            logging.exception("in-band registration: failed for %s", self.boundjid.bare)
-            # If registration fails, disconnect so the container doesn’t spin.
+
+            # We want a clean SASL auth after creation.
+            # Disconnect now; the outer runner will reconnect by restarting, or we can reconnect here.
+            self._reconnect_after_register = True
+            self.disconnect()
+
+        except Exception as e:
+            # If the account already exists, some servers respond with conflict (409) or similar.
+            # Slixmpp surfaces various exception shapes; log and stop to avoid spam.
+            logging.exception("in-band registration: failed for %s (%s)", self.boundjid.bare, e)
             self.disconnect()
 
     async def on_session_start(self, _event):
@@ -178,12 +203,10 @@ class AgentBot(slixmpp.ClientXMPP):
         now = asyncio.get_running_loop().time()
         key = (mtype, frm, body)
 
-        # purge old
         for k, ts in list(self._recent.items()):
             if now - ts > 2.0:
                 del self._recent[k]
 
-        # de-dupe echoes / repeats
         if key in self._recent:
             return
         self._recent[key] = now
@@ -191,7 +214,6 @@ class AgentBot(slixmpp.ClientXMPP):
         is_group = (mtype == "groupchat")
         is_direct = (mtype == "chat")
 
-        # Ignore our own MUC echoes: room@.../nick
         if is_group and frm.endswith("/" + self.cfg.nick):
             return
 
@@ -248,8 +270,7 @@ def build_connect_call(xmpp: AgentBot, ip: str, port: int) -> Tuple[Tuple[Any, .
     return ((ip, port),), kwargs
 
 
-async def amain() -> int:
-    cfg = load_cfg()
+async def run_bot_once(cfg: Cfg) -> int:
     ip = resolve_ipv4(cfg.host)
     jid = f"{cfg.nick}@{cfg.domain}"
 
@@ -276,14 +297,47 @@ async def amain() -> int:
     if not ok:
         raise RuntimeError("connect() returned False")
 
-    # slixmpp builds vary
+    # Some builds are blocking, some async-native
     if hasattr(xmpp, "process"):
-        xmpp.process(forever=True)
-        return 0
+        xmpp.process(forever=False)  # return when disconnected
+    else:
+        # Wait until we either got ready or disconnected
 
-    await xmpp._ready.wait()
+        ready_task = asyncio.create_task(xmpp._ready.wait())
+        try:
+            await asyncio.wait({ready_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            if not ready_task.done():
+                ready_task.cancel()
+
+        # If we registered successfully, reconnect once to authenticate cleanly
+    if getattr(xmpp, "_reconnect_after_register", False):
+        logging.warning("reconnecting after successful registration for %s", xmpp.boundjid.bare)
+        await asyncio.sleep(0.5)
+        return 2  # signal caller to reconnect
+
+    return 0
+
+
+async def amain() -> int:
+    cfg = load_cfg()
+
+    # Run forever (connect, register if needed, reconnect once, then stay connected)
     while True:
-        await asyncio.sleep(3600)
+        code = await run_bot_once(cfg)
+
+        # code==2 means we registered and want to reconnect immediately
+        if code == 2:
+            continue
+
+        # If we ever disconnect unexpectedly, wait a bit and reconnect
+        if code != 0:
+            await asyncio.sleep(2.0)
+            continue
+
+        # Normal connected path: keep process alive
+        while True:
+            await asyncio.sleep(3600)
 
 
 def main() -> int:
