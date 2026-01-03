@@ -1,42 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NAME="automatr-prosody"
-IMAGE="prosody/prosody:latest"
-DOMAIN="${AUTOMATR_XMPP_DOMAIN:-automatr-xmpp.local}"
-CFG="$(pwd)/config/prosody/prosody.cfg.lua"
-VOL="automatr-prosody-data"
+NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
+IMAGE="${AUTOMATR_PROSODY_IMAGE:-prosody/prosody:latest}"
 
-# Network to use (default: automatr-net)
-NET="${DOCKER_NETWORK:-automatr-net}"
+# Domain (XMPP VirtualHost) — this is the ONE knob that should move with the machine.
+DOMAIN="${AUTOMATR_XMPP_DOMAIN:-automatr-xmpp.local}"
+
+CFG="$(pwd)/config/prosody/prosody.cfg.lua"
+VOL="${AUTOMATR_PROSODY_VOLUME:-automatr-prosody-data}"
+
+# Network to use (prefer your repo env var; fallback to older DOCKER_NETWORK)
+NET="${AUTOMATR_DOCKER_NETWORK:-${DOCKER_NETWORK:-automatr-net}}"
+
+# Let containers resolve the domain as an alias (handy if agents connect by domain)
 ALIAS="${DOMAIN}"
+
+# Ports (host published)
+C2S_PORT="${AUTOMATR_PROSODY_PORT:-5222}"
+HTTP_PORT="${AUTOMATR_PROSODY_HTTP_PORT:-5280}"
 
 if [[ ! -f "$CFG" ]]; then
   echo "Missing prosody config: $CFG" >&2
   exit 1
 fi
 
-# If it's already running, do nothing
+# If already running, do nothing
 if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
-  echo "$NAME already running"
+  echo "Prosody already running: $NAME"
   exit 0
 fi
 
-# If container exists but is stopped, start it
+# If exists but stopped, remove it (keeps volume)
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
-  docker start "$NAME" >/dev/null
-  echo "Started existing $NAME"
-  exit 0
+  docker rm -f "$NAME" >/dev/null
 fi
 
 docker run -d \
   --name "$NAME" \
   --network "$NET" \
   --network-alias "$ALIAS" \
-  -p 5222:5222 \
-  -p 5280:5280 \
+  -e "AUTOMATR_XMPP_DOMAIN=$DOMAIN" \
+  -e "AUTOMATR_XMPP_ADMIN_USER=${AUTOMATR_XMPP_ADMIN_USER:-andy}" \
+  -p "${C2S_PORT}:5222" \
+  -p "${HTTP_PORT}:5280" \
   -v "$CFG:/etc/prosody/prosody.cfg.lua:ro" \
   -v "$VOL:/var/lib/prosody" \
   "$IMAGE"
 
-echo "Prosody is up: $NAME (domain: $DOMAIN, net: $NET, alias: $ALIAS)"
+echo "Prosody is up: $NAME (domain: $DOMAIN, net: $NET, alias: $ALIAS, c2s: $C2S_PORT, http: $HTTP_PORT)"
