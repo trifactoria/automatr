@@ -33,6 +33,7 @@ cross_domain_websocket = true
 -- For now keep minimal.
 
 allow_registration = true
+allow_unencrypted_plain_auth = true
 
 -- IMPORTANT: keep STARTTLS optional while you debug
 c2s_require_encryption = false
