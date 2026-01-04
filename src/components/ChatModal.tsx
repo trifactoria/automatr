@@ -29,20 +29,22 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // "nick" used inside MUC
   const [currentNick] = useState<string>(XMPP_CONFIG.username);
 
   const [rooms, setRooms] = useState<string[]>([XMPP_CONFIG.defaultRoom]);
+  const [activeRoom, setActiveRoom] = useState<string>(XMPP_CONFIG.defaultRoom);
   const [occupants, setOccupants] = useState<Occupant[]>([]);
 
   const connectionRef = useRef<any>(null);
   const StropheRef = useRef<any>(null);
 
   const pendingSendsRef = useRef<string[]>([]);
-  const roomJoinAttemptRef = useRef(0);
   const handlersInstalledRef = useRef(false);
+  const joinAttemptRef = useRef(0);
 
-  // Keep a ref in sync so timeouts/handlers don't read stale "joined"
   const joinedRef = useRef(false);
+  const activeRoomRef = useRef(activeRoom);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -51,10 +53,15 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   }, [joined]);
 
   useEffect(() => {
+    activeRoomRef.current = activeRoom;
+  }, [activeRoom]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const roomBareJid = () => `${XMPP_CONFIG.defaultRoom}@${XMPP_CONFIG.mucDomain}`;
+  const roomBareJidFor = (roomName: string) => `${roomName}@${XMPP_CONFIG.mucDomain}`;
+  const currentRoomBareJid = () => roomBareJidFor(activeRoomRef.current);
 
   function hasWebCryptoDeriveBits(): boolean {
     try {
@@ -67,11 +74,11 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   }
 
   /**
-   * If WebCrypto isn't available, Strophe's SCRAM implementation will crash
-   * trying to call crypto.subtle.deriveBits(). Disable SCRAM up-front so SASL
-   * falls back to PLAIN.
+   * If WebCrypto isn't available (insecure context / older browser),
+   * Strophe SCRAM can crash at crypto.subtle.deriveBits.
+   * Prune SCRAM from Strophe's global mechanism registry BEFORE connecting.
    */
-  function disableScramMechanismsIfNoWebCrypto(Strophe: any) {
+  function disableScramIfNoWebCrypto(Strophe: any) {
     if (hasWebCryptoDeriveBits()) return;
 
     console.warn("[XMPP] crypto.subtle missing; disabling SCRAM SASL mechanisms (forcing PLAIN)");
@@ -79,14 +86,6 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     try {
       const registry = (Strophe as any)?.SASLMechanisms;
       if (registry && typeof registry === "object") {
-        delete registry["SCRAM-SHA-1"];
-        delete registry["SCRAM-SHA-1-PLUS"];
-        delete registry["SCRAM-SHA-256"];
-        delete registry["SCRAM-SHA-256-PLUS"];
-        delete registry["SCRAM-SHA-512"];
-        delete registry["SCRAM-SHA-512-PLUS"];
-
-        // Be aggressive for variants
         for (const k of Object.keys(registry)) {
           if (k.toUpperCase().includes("SCRAM")) delete registry[k];
         }
@@ -96,14 +95,307 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     }
   }
 
-  const confirmJoinedOnce = () => {
-    if (joinedRef.current) return;
-    console.log("[MUC] Join confirmed");
-    setJoined(true);
+  function installHandlersOnce(connection: any, Strophe: any) {
+    if (handlersInstalledRef.current) return;
+    handlersInstalledRef.current = true;
 
-    const queued = pendingSendsRef.current.splice(0);
-    queued.forEach((text) => sendGroupchat(text));
-  };
+    // Groupchat messages: filter inside handler by the active room bare JID.
+    connection.addHandler(
+      (stanza: Element) => onMessage(stanza, Strophe),
+      null,
+      "message",
+      "groupchat",
+      null,
+      null
+    );
+
+    // Presence: filter inside handler by active room bare JID.
+    connection.addHandler((stanza: Element) => onPresence(stanza, Strophe), null, "presence", null, null, null);
+  }
+
+  function joinRoomByName(roomName: string) {
+    if (!connectionRef.current || !StropheRef.current) return;
+    const connection = connectionRef.current;
+    const Strophe = StropheRef.current;
+
+    const oldRoom = activeRoomRef.current;
+    if (oldRoom === roomName) return;
+
+    // leave old
+    leaveRoomByName(oldRoom);
+
+    // switch local state
+    setActiveRoom(roomName);
+    activeRoomRef.current = roomName;
+
+    // reset room-scoped UI
+    setJoined(false);
+    joinedRef.current = false;
+    setOccupants([]);
+    setMessages([]);
+    pendingSendsRef.current = [];
+    joinAttemptRef.current = 0;
+
+    // join new
+    const roomJid = roomBareJidFor(roomName);
+    const nick = currentNick;
+
+    console.log("[MUC] Switching rooms:", oldRoom, "->", roomName, "join", roomJid, "as", nick);
+
+    const presence = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
+      .c("x", { xmlns: Strophe.NS.MUC })
+      .tree();
+    connection.send(presence);
+
+    // retry join if needed
+    joinAttemptRef.current += 1;
+    const attempt = joinAttemptRef.current;
+    setTimeout(() => {
+      if (!connectionRef.current?.connected) return;
+      if (!joinedRef.current && attempt === joinAttemptRef.current) {
+        console.warn("[MUC] join not confirmed yet; retrying join", roomName);
+        const retry = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
+          .c("x", { xmlns: Strophe.NS.MUC })
+          .tree();
+        connection.send(retry);
+      }
+    }, 2000);
+  }
+
+  function joinCurrentRoom() {
+    if (!connectionRef.current || !StropheRef.current) return;
+    const connection = connectionRef.current;
+    const Strophe = StropheRef.current;
+
+    const roomName = activeRoomRef.current;
+    const roomJid = roomBareJidFor(roomName);
+    const nick = currentNick;
+
+    console.log("[MUC] Joining room", roomJid, "as", nick);
+
+    const presence = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
+      .c("x", { xmlns: Strophe.NS.MUC })
+      .tree();
+    connection.send(presence);
+
+    joinAttemptRef.current += 1;
+    const attempt = joinAttemptRef.current;
+
+    setTimeout(() => {
+      if (!connectionRef.current?.connected) return;
+      if (!joinedRef.current && attempt === joinAttemptRef.current) {
+        console.warn("[MUC] join not confirmed yet; retrying join", roomName);
+        const retry = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
+          .c("x", { xmlns: Strophe.NS.MUC })
+          .tree();
+        connection.send(retry);
+      }
+    }, 2000);
+  }
+
+  function leaveRoomByName(roomName: string) {
+    if (!connectionRef.current || !StropheRef.current) return;
+    const connection = connectionRef.current;
+    const Strophe = StropheRef.current;
+
+    const roomJid = roomBareJidFor(roomName);
+    const nick = currentNick;
+
+    const presence = new Strophe.Builder("presence", {
+      to: `${roomJid}/${nick}`,
+      type: "unavailable",
+    }).tree();
+
+    connection.send(presence);
+  }
+
+  function sendGroupchat(roomName: string, text: string) {
+    if (!connectionRef.current || !StropheRef.current) return;
+    const Strophe = StropheRef.current;
+    const roomJid = roomBareJidFor(roomName);
+
+    const message = new Strophe.Builder("message", {
+      to: roomJid,
+      type: "groupchat",
+      id: `web-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    })
+      .c("body")
+      .t(text)
+      .tree();
+
+    connectionRef.current.send(message);
+  }
+
+  function discoverRooms(connection: any, Strophe: any) {
+    const mucService = XMPP_CONFIG.mucDomain;
+
+    const iq = new Strophe.Builder("iq", {
+      type: "get",
+      to: mucService,
+      id: `disco-items-${Date.now()}`,
+    })
+      .c("query", { xmlns: "http://jabber.org/protocol/disco#items" })
+      .tree();
+
+    connection.sendIQ(
+      iq,
+      (res: Element) => {
+        try {
+          const items = Array.from(res.getElementsByTagName("item"));
+          const discovered = items
+            .map((it) => it.getAttribute("jid") || "")
+            .filter(Boolean)
+            .map((jid) => {
+              const at = jid.indexOf("@");
+              return at > 0 ? jid.slice(0, at) : jid;
+            })
+            .filter(Boolean);
+
+          setRooms((prev) => {
+            const base = new Set<string>([...prev, XMPP_CONFIG.defaultRoom, ...discovered]);
+            return Array.from(base).sort((a, b) => a.localeCompare(b));
+          });
+
+          console.log("[MUC] Discovered rooms:", discovered);
+        } catch (e) {
+          console.warn("[MUC] Failed to parse disco#items response", e);
+        }
+      },
+      (err: Element) => {
+        console.warn("[MUC] disco#items failed (rooms list will be minimal)", err);
+      }
+    );
+  }
+
+  function onMessage(stanza: Element, Strophe: any) {
+    const from = stanza.getAttribute("from") || "";
+    const type = stanza.getAttribute("type") || "";
+    const body = stanza.querySelector("body")?.textContent || "";
+
+    if (type !== "groupchat") return true;
+    if (!from || !body) return true;
+
+    const bareFrom = Strophe.getBareJidFromJid(from);
+    const activeBare = currentRoomBareJid();
+
+    // Only show messages for the active room.
+    if (bareFrom !== activeBare) return true;
+
+    const nick = Strophe.getResourceFromJid(from) || "Unknown";
+    const isOwnMessage = nick === currentNick;
+
+    const messageId = stanza.getAttribute("id") || `msg-${Date.now()}-${Math.random()}`;
+
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === messageId)) return prev;
+      return [
+        ...prev,
+        {
+          id: messageId,
+          from,
+          nick,
+          body,
+          timestamp: new Date(),
+          isOwnMessage,
+        },
+      ];
+    });
+
+    return true;
+  }
+
+  function onPresence(stanza: Element, Strophe: any) {
+    const from = stanza.getAttribute("from") || "";
+    const type = stanza.getAttribute("type") || "";
+
+    if (!from) return true;
+
+    const nick = Strophe.getResourceFromJid(from);
+    if (!nick) return true;
+
+    const bareFrom = Strophe.getBareJidFromJid(from);
+    const activeBare = currentRoomBareJid();
+
+    // Only track occupants for the active room.
+    if (bareFrom !== activeBare) return true;
+
+    const online = type !== "unavailable";
+
+    // Join confirmation for ourselves: status code 110 in muc#user x.
+    if (nick === currentNick && online) {
+      const x = stanza.getElementsByTagNameNS("http://jabber.org/protocol/muc#user", "x")[0];
+      if (x) {
+        const statuses = x.getElementsByTagName("status");
+        for (let i = 0; i < statuses.length; i++) {
+          const code = statuses[i].getAttribute("code");
+          if (code === "110") {
+            if (!joinedRef.current) {
+              console.log("[MUC] Join confirmed (self-presence 110)");
+              joinedRef.current = true;
+              setJoined(true);
+
+              const queued = pendingSendsRef.current.splice(0);
+              const roomName = activeRoomRef.current;
+              queued.forEach((text) => sendGroupchat(roomName, text));
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    setOccupants((prev) => {
+      const map = new Map(prev.map((o) => [o.nick, o]));
+      if (!online) {
+        map.delete(nick);
+      } else {
+        map.set(nick, { nick, online: true });
+      }
+      return Array.from(map.values()).sort((a, b) => {
+        const aAgent = a.nick.startsWith("agent-") ? 0 : 1;
+        const bAgent = b.nick.startsWith("agent-") ? 0 : 1;
+        if (aAgent !== bAgent) return aAgent - bAgent;
+        return a.nick.localeCompare(b.nick);
+      });
+    });
+
+    return true;
+  }
+
+  function sendMessage() {
+    const text = inputValue.trim();
+    if (!text) return;
+
+    if (connectionState !== "connected" || !connectionRef.current?.connected) return;
+
+    if (!joinedRef.current) {
+      pendingSendsRef.current.push(text);
+      setInputValue("");
+      console.warn("[MUC] Not joined yet; queued message");
+      return;
+    }
+
+    const roomName = activeRoomRef.current;
+    sendGroupchat(roomName, text);
+    setInputValue("");
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  function mentionNick(nick: string) {
+    setInputValue((prev) => {
+      const base = prev.trim().length ? prev : "";
+      const mention = `@${nick} `;
+      if (!base) return mention;
+      if (base.includes(`@${nick}`)) return base + " ";
+      return `${base} ${mention}`;
+    });
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -114,12 +406,15 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     setMessages([]);
     setOccupants([]);
     setRooms([XMPP_CONFIG.defaultRoom]);
+    setActiveRoom(XMPP_CONFIG.defaultRoom);
+    activeRoomRef.current = XMPP_CONFIG.defaultRoom;
+
     setJoined(false);
     joinedRef.current = false;
 
     pendingSendsRef.current = [];
-    roomJoinAttemptRef.current = 0;
     handlersInstalledRef.current = false;
+    joinAttemptRef.current = 0;
 
     import("strophe.js")
       .then((mod) => {
@@ -129,8 +424,8 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
         if (!Strophe) throw new Error("strophe.js did not export Strophe");
         StropheRef.current = Strophe;
 
-        // IMPORTANT: do this BEFORE creating the connection
-        disableScramMechanismsIfNoWebCrypto(Strophe);
+        // Must happen before creating connection / connect()
+        disableScramIfNoWebCrypto(Strophe);
 
         const service = XMPP_CONFIG.useWebSocket ? XMPP_CONFIG.websocketUrl : XMPP_CONFIG.boshUrl;
 
@@ -162,15 +457,19 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                 joinedRef.current = false;
 
                 pendingSendsRef.current = [];
-                roomJoinAttemptRef.current = 0;
-                handlersInstalledRef.current = false;
+                joinAttemptRef.current = 0;
 
                 console.log("[XMPP] Connected");
 
-                // Initial presence + then MUC discovery/join
+                // Install handlers once for the lifetime of the connection.
+                installHandlersOnce(connection, Strophe);
+
+                // send initial presence (not MUC join)
                 connection.send(new Strophe.Builder("presence").tree());
+
+                // discover + join active room
                 discoverRooms(connection, Strophe);
-                joinRoom(connection, Strophe);
+                joinCurrentRoom();
                 break;
 
               case Status.DISCONNECTED:
@@ -210,246 +509,27 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     return () => {
       mounted = false;
+
       const conn = connectionRef.current;
-      if (conn?.connected && StropheRef.current) {
-        leaveRoom();
-        conn.disconnect();
+      const Strophe = StropheRef.current;
+
+      try {
+        if (conn?.connected && Strophe) {
+          // leave active room
+          leaveRoomByName(activeRoomRef.current);
+          conn.disconnect();
+        }
+      } catch {
+        // ignore cleanup errors
       }
+
       connectionRef.current = null;
       StropheRef.current = null;
+      handlersInstalledRef.current = false;
+      joinAttemptRef.current = 0;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-
-  const discoverRooms = (connection: any, Strophe: any) => {
-    const mucService = XMPP_CONFIG.mucDomain;
-
-    const iq = new Strophe.Builder("iq", {
-      type: "get",
-      to: mucService,
-      id: `disco-items-${Date.now()}`,
-    })
-      .c("query", { xmlns: "http://jabber.org/protocol/disco#items" })
-      .tree();
-
-    connection.sendIQ(
-      iq,
-      (res: Element) => {
-        try {
-          const items = Array.from(res.getElementsByTagName("item"));
-          const discovered = items
-            .map((it) => it.getAttribute("jid") || "")
-            .filter(Boolean)
-            .map((jid) => {
-              const at = jid.indexOf("@");
-              return at > 0 ? jid.slice(0, at) : jid;
-            })
-            .filter(Boolean);
-
-          setRooms((prev) => {
-            const base = new Set<string>([...prev, XMPP_CONFIG.defaultRoom, ...discovered]);
-            return Array.from(base).sort((a, b) => a.localeCompare(b));
-          });
-
-          console.log("[MUC] Discovered rooms:", discovered);
-        } catch (e) {
-          console.warn("[MUC] Failed to parse disco#items response", e);
-        }
-      },
-      (err: Element) => {
-        console.warn("[MUC] disco#items failed (rooms list will be minimal)", err);
-      }
-    );
-  };
-
-  const installHandlersOnce = (connection: any, Strophe: any) => {
-    if (handlersInstalledRef.current) return;
-    handlersInstalledRef.current = true;
-
-    const roomJid = roomBareJid();
-
-    // Messages: safe to filter to the room
-    connection.addHandler(
-      (stanza: Element) => onMessage(stanza, Strophe),
-      null,
-      "message",
-      "groupchat",
-      null,
-      roomJid,
-      { matchBare: true }
-    );
-
-    // Presence: DO NOT filter by `from` at handler layer (it is unreliable for MUC presence).
-    // Filter inside onPresence.
-    connection.addHandler((stanza: Element) => onPresence(stanza, Strophe), null, "presence", null, null, null);
-  };
-
-  const joinRoom = (connection: any, Strophe: any) => {
-    const roomJid = roomBareJid();
-    const nick = currentNick;
-
-    installHandlersOnce(connection, Strophe);
-
-    console.log("[MUC] Joining room", roomJid, "as", nick);
-
-    const presence = new Strophe.Builder("presence", {
-      to: `${roomJid}/${nick}`,
-    })
-      .c("x", { xmlns: Strophe.NS.MUC })
-      .tree();
-
-    connection.send(presence);
-
-    roomJoinAttemptRef.current += 1;
-    const attempt = roomJoinAttemptRef.current;
-
-    setTimeout(() => {
-      if (!connectionRef.current?.connected) return;
-      if (!joinedRef.current && attempt === roomJoinAttemptRef.current) {
-        console.warn("[MUC] join not confirmed yet; retrying join");
-        const retry = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
-          .c("x", { xmlns: Strophe.NS.MUC })
-          .tree();
-        connection.send(retry);
-      }
-    }, 2000);
-  };
-
-  const leaveRoom = () => {
-    if (!connectionRef.current || !StropheRef.current) return;
-
-    const roomJid = roomBareJid();
-    const nick = currentNick;
-
-    const presence = new StropheRef.current.Builder("presence", {
-      to: `${roomJid}/${nick}`,
-      type: "unavailable",
-    }).tree();
-
-    connectionRef.current.send(presence);
-  };
-
-  const sendGroupchat = (text: string) => {
-    if (!connectionRef.current || !StropheRef.current) return;
-    const roomJid = roomBareJid();
-
-    const message = new StropheRef.current.Builder("message", {
-      to: roomJid,
-      type: "groupchat",
-      id: `web-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    })
-      .c("body")
-      .t(text)
-      .tree();
-
-    connectionRef.current.send(message);
-  };
-
-  const onMessage = (stanza: Element, Strophe: any) => {
-    const from = stanza.getAttribute("from");
-    const type = stanza.getAttribute("type");
-    const body = stanza.querySelector("body")?.textContent;
-
-    if (!from || !body || type !== "groupchat") return true;
-
-    const nick = Strophe.getResourceFromJid(from);
-    const isOwnMessage = nick === currentNick;
-
-    const messageId = stanza.getAttribute("id") || `msg-${Date.now()}-${Math.random()}`;
-
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === messageId)) return prev;
-      return [
-        ...prev,
-        {
-          id: messageId,
-          from,
-          nick: nick || "Unknown",
-          body,
-          timestamp: new Date(),
-          isOwnMessage,
-        },
-      ];
-    });
-
-    return true;
-  };
-
-  const onPresence = (stanza: Element, Strophe: any) => {
-    const from = stanza.getAttribute("from") || "";
-    const type = stanza.getAttribute("type") || ""; // "" means available
-
-    // Only care about presence for our room
-    const roomJid = roomBareJid();
-    const bareFrom = Strophe.getBareJidFromJid(from);
-    if (bareFrom !== roomJid) return true;
-
-    const nick = Strophe.getResourceFromJid(from);
-    if (!nick) return true;
-
-    const online = type !== "unavailable";
-
-    // Join confirmation:
-    // Prefer self-presence code 110, but also treat any available self presence
-    // as confirmed (fallback for servers/clients that omit 110).
-    if (nick === currentNick && online) {
-      let confirmed = false;
-
-      const xUser = stanza.getElementsByTagNameNS("http://jabber.org/protocol/muc#user", "x")[0];
-      if (xUser) {
-        const statuses = xUser.getElementsByTagName("status");
-        for (let i = 0; i < statuses.length; i++) {
-          if (statuses[i].getAttribute("code") === "110") {
-            confirmed = true;
-            break;
-          }
-        }
-      }
-
-      // fallback: if we got our own available presence stanza, we're joined
-      if (!confirmed) confirmed = true;
-
-      if (confirmed) confirmJoinedOnce();
-    }
-
-    setOccupants((prev) => {
-      const map = new Map(prev.map((o) => [o.nick, o]));
-      if (!online) map.delete(nick);
-      else map.set(nick, { nick, online: true });
-      return Array.from(map.values()).sort((a, b) => {
-        const aAgent = a.nick.startsWith("agent-") ? 0 : 1;
-        const bAgent = b.nick.startsWith("agent-") ? 0 : 1;
-        if (aAgent !== bAgent) return aAgent - bAgent;
-        return a.nick.localeCompare(b.nick);
-      });
-    });
-
-    return true;
-  };
-
-  const sendMessage = () => {
-    const text = inputValue.trim();
-    if (!text) return;
-
-    if (connectionState !== "connected" || !connectionRef.current?.connected) return;
-
-    if (!joinedRef.current) {
-      pendingSendsRef.current.push(text);
-      setInputValue("");
-      console.warn("[MUC] Not joined yet; queued message");
-      return;
-    }
-
-    sendGroupchat(text);
-    setInputValue("");
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
 
   return (
     <Modal open={open} onClose={onClose} title="Chat">
@@ -471,24 +551,23 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
           </div>
 
           <div className="flex-1 overflow-y-auto p-2">
-            <div className="mb-2 px-2 text-xs font-semibold uppercase text-gray-600">Active</div>
+            <div className="mb-2 px-2 text-xs font-semibold uppercase text-gray-600">Rooms</div>
 
-            <div className="mb-2 rounded bg-blue-100 px-3 py-2 text-sm text-blue-900"># {XMPP_CONFIG.defaultRoom}</div>
-
-            {rooms.length > 1 && (
-              <>
-                <div className="mb-2 px-2 text-xs font-semibold uppercase text-gray-600">Rooms</div>
-                <div className="space-y-1">
-                  {rooms
-                    .filter((r) => r !== XMPP_CONFIG.defaultRoom)
-                    .map((r) => (
-                      <div key={r} className="mb-1 rounded bg-gray-100 px-3 py-2 text-sm text-gray-900">
-                        # {r}
-                      </div>
-                    ))}
-                </div>
-              </>
-            )}
+            <div className="space-y-1">
+              {rooms.map((r) => (
+                <button
+                  key={r}
+                  onClick={() => joinRoomByName(r)}
+                  className={`w-full rounded px-3 py-2 text-left text-sm ${
+                    r === activeRoom ? "bg-blue-100 text-blue-900" : "bg-white text-gray-900 hover:bg-gray-100"
+                  }`}
+                  disabled={connectionState !== "connected"}
+                  title={connectionState !== "connected" ? "Connect first" : `Join #${r}`}
+                >
+                  # {r}
+                </button>
+              ))}
+            </div>
 
             <div className="mt-4 mb-2 px-2 text-xs font-semibold uppercase text-gray-600">Online</div>
             {occupants.length === 0 ? (
@@ -496,13 +575,15 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
             ) : (
               <div className="space-y-1">
                 {occupants.map((o) => (
-                  <div
+                  <button
                     key={o.nick}
-                    className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm text-gray-900"
+                    onClick={() => mentionNick(o.nick)}
+                    className="flex w-full items-center gap-2 rounded bg-white px-3 py-2 text-left text-sm text-gray-900 hover:bg-gray-100"
+                    title="Click to @mention"
                   >
                     <div className="h-2 w-2 rounded-full bg-green-500" />
                     <span className="truncate">{o.nick}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -524,8 +605,8 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
               <span className="text-gray-600">
                 {connectionState === "connected"
                   ? joined
-                    ? "Connected"
-                    : "Joining room..."
+                    ? `Connected (#${activeRoom})`
+                    : `Joining #${activeRoom}...`
                   : connectionState === "connecting"
                     ? "Connecting..."
                     : "Disconnected"}
@@ -559,7 +640,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                     {connectionState === "connected"
                       ? joined
                         ? "No messages yet. Start the conversation!"
-                        : "Joining room..."
+                        : `Joining #${activeRoom}...`
                       : "Connecting to chat..."}
                   </div>
                 </div>
@@ -599,7 +680,11 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
               <input
                 type="text"
                 placeholder={
-                  connectionState === "connected" ? (joined ? "Type a message..." : "Joining room...") : "Connecting..."
+                  connectionState === "connected"
+                    ? joined
+                      ? `Message #${activeRoom}...`
+                      : `Joining #${activeRoom}...`
+                    : "Connecting..."
                 }
                 className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 value={inputValue}
