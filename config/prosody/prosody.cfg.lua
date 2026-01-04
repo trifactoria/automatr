@@ -7,7 +7,7 @@ local os = require "os"
 local DOMAIN = os.getenv("AUTOMATR_XMPP_DOMAIN") or "xps.local"
 local MUC_DOMAIN = "conference." .. DOMAIN
 
-admins = { "admin@" .. DOMAIN }
+admins = { "andy@" .. DOMAIN, "web@" .. DOMAIN }
 
 modules_enabled = {
   "roster";
@@ -26,7 +26,7 @@ modules_enabled = {
   "mam";         -- message archive (optional)
   "carbons";     -- message carbons (optional)
   "muc_mam";
-  "smacks";
+--  "smacks";
 }
 
 log = {
@@ -49,6 +49,7 @@ cross_domain_websocket = {
   "http://localhost:3000",
   "https://localhost:3000",
 }
+cross_domain_websocket = true
 
 cross_domain_bosh = {
   "http://xps.local:3000",
@@ -56,16 +57,13 @@ cross_domain_bosh = {
   "http://localhost:3000",
   "https://localhost:3000",
 }
+cross_domain_bosh = true
 
 -- dev defaults
 allow_registration = true
 c2s_require_encryption = false  -- allow non-TLS for dev if needed
 s2s_require_encryption = false
--- Dev: allow websocket from arbitrary origins (browser UI, localhost, LAN, etc.)
-cross_domain_websocket = true
 consider_websocket_secure = true
--- Older configs sometimes use this name:
-cross_domain_bosh = true
 
 
 
@@ -88,3 +86,5 @@ VirtualHost(DOMAIN)
 Component ("conference." .. DOMAIN) "muc"
   name = "Automatr Chat"
   restrict_room_creation = false
+  muc_room_locking = false
+

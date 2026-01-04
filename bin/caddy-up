@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+docker run -d --name automatr-caddy --network host   -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro"   -v "$PWD/certs:/certs:ro"   caddy:2
