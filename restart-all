@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-cd /home/andy/projects/automatr/
+cd /home/andy/Downloads/automatr2/
 # Kill containers
 notify-send "Killing containers"
 echo "Killing containers..."

@@ -445,6 +445,8 @@ def _start_container_impl(name: str) -> tuple[bool, str]:
         # - API base so agents can phone home
         environment = {
             "AUTOMATR_CONTAINER_NAME": name,
+            "AUTOMATR_AGENT_NAME": "agent-" + name,
+            "AUTOMATR_AGENT_JID": "agent-" + name + "@" + cfg.xmpp_domain,
             "AUTOMATR_CONTAINER_ROOT": cfg.container_root,
             "AUTOMATR_QUEUE_DIR": cfg.queue_dir,
             "AUTOMATR_SCREEN_W": cfg.screen_w,

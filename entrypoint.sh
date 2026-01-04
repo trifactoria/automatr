@@ -157,6 +157,35 @@ log "Starting automation runner..."
 ) || log "ERROR: runner.py exited" &
 RUNNER_PID=$!
 
+# --- XMPP / Agent identity (hard rules) ---
+
+: "${AUTOMATR_XMPP_DOMAIN:=xps.local}"
+
+# Prefer orchestrator-provided container name; fall back to node; then obvious sentinel.
+if [ -n "${AUTOMATR_CONTAINER_NAME:-}" ]; then
+  : # ok
+elif [ -n "${AUTOMATR_NODE:-}" ]; then
+  AUTOMATR_CONTAINER_NAME="${AUTOMATR_NODE}"
+else
+  AUTOMATR_CONTAINER_NAME="something-broke"
+fi
+
+# Derive stable agent identity from container name
+: "${AUTOMATR_AGENT_NAME:=agent-${AUTOMATR_CONTAINER_NAME}}"
+: "${AUTOMATR_AGENT_JID:=${AUTOMATR_AGENT_NAME}@${AUTOMATR_XMPP_DOMAIN}}"
+
+# IMPORTANT: export so agent_bot.py actually receives them
+export AUTOMATR_CONTAINER_NAME
+export AUTOMATR_AGENT_NAME
+export AUTOMATR_AGENT_JID
+
+# log what we will actually use
+echo "[entrypoint] XMPP domain=$AUTOMATR_XMPP_DOMAIN" >&2
+echo "[entrypoint] container_name=$AUTOMATR_CONTAINER_NAME" >&2
+echo "[entrypoint] agent_name=$AUTOMATR_AGENT_NAME" >&2
+echo "[entrypoint] agent_jid=$AUTOMATR_AGENT_JID" >&2
+echo "[entrypoint] register=${AUTOMATR_XMPP_REGISTER:-0} insecure_tls=${AUTOMATR_XMPP_INSECURE_TLS:-0}" >&2
+
 # --- Start agent XMPP bot ---
 log "Starting agent XMPP bot..."
 (
