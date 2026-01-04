@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CADDY_DIR="$ROOT/caddy"
+
 docker rm -f automatr-caddy >/dev/null 2>&1 || true
+
 docker run -d --name automatr-caddy --restart unless-stopped \
-  --network host \
-  -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
-  -v "$PWD/certs:/certs:ro" \
-  -v "$PWD/caddy-data:/data" \
-  -v "$PWD/caddy-config:/config" \
+  --network automatr-net \
+  -p 80:80 \
+  -p 443:443 \
+  --add-host host.docker.internal:host-gateway \
+  -v "$CADDY_DIR/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  -v "$CADDY_DIR/data:/data" \
+  -v "$CADDY_DIR/config:/config" \
+  -v "$ROOT/certs:/certs:ro" \
   caddy:2
