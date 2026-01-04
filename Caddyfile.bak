@@ -1,0 +1,5 @@
+https://xps.local {
+  tls /certs/xps.local.pem /certs/xps.local-key.pem
+  reverse_proxy 0.0.0.0:3000
+}
+

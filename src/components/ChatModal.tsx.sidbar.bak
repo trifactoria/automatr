@@ -4,13 +4,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "./Modal";
 import XMPP_CONFIG from "@/lib/xmppConfig";
-import { deriveXmppTransportUrlsFromWindow } from "@/lib/xmppServiceUrl";
-import {
-  disableScramMechanismsIfNoWebCrypto,
-  hasWebCryptoDeriveBits,
-  nowId,
-  safeLower,
-} from "@/lib/xmppStropheUtil";
 
 type Message = {
   id: string;
@@ -20,17 +13,26 @@ type Message = {
   timestamp: Date;
   isOwnMessage: boolean;
   kind: "room" | "dm";
-  room: string; // room node context
+  room: string; // room node, e.g. "automatr" (still used for room stream + context)
   dmJid?: string; // when kind==="dm"
 };
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+
 type Occupant = { nick: string; online: boolean };
 type RoomInfo = { name: string }; // node only
 
 type ChatTarget =
   | { kind: "room"; room: string }
   | { kind: "dm"; room: string; nick: string; jid: string };
+
+function nowId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function safeLower(s: string) {
+  return (s || "").toLowerCase();
+}
 
 export function ChatModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
@@ -62,14 +64,17 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   const handlersInstalledRef = useRef(false);
   const joinedRef = useRef(false);
   const activeRoomRef = useRef(XMPP_CONFIG.defaultRoom);
-  const targetRef = useRef<ChatTarget>({ kind: "room", room: XMPP_CONFIG.defaultRoom });
+  const targetRef = useRef<ChatTarget>({
+    kind: "room",
+    room: XMPP_CONFIG.defaultRoom,
+  });
 
   const pendingRoomSendsRef = useRef<string[]>([]);
   const pendingDmSendsRef = useRef<{ room: string; nick: string; jid: string; text: string }[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Derived helpers (addressing)
+  // Derived helpers
   const domain = XMPP_CONFIG.domain;
   const mucDomain = XMPP_CONFIG.mucDomain;
 
@@ -98,6 +103,37 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  function hasWebCryptoDeriveBits(): boolean {
+    try {
+      const c: any = (globalThis as any)?.crypto;
+      const subtle: any = c?.subtle;
+      return !!subtle && typeof subtle.deriveBits === "function";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * If WebCrypto isn't available (insecure context / older env),
+   * Strophe SCRAM can crash. We prune SCRAM from Strophe registry BEFORE connect().
+   */
+  function disableScramMechanismsIfNoWebCrypto(Strophe: any) {
+    if (hasWebCryptoDeriveBits()) return;
+
+    console.warn("[XMPP] crypto.subtle missing; disabling SCRAM SASL mechanisms (forcing PLAIN)");
+
+    try {
+      const registry = (Strophe as any)?.SASLMechanisms;
+      if (registry && typeof registry === "object") {
+        for (const k of Object.keys(registry)) {
+          if (k.toUpperCase().includes("SCRAM")) delete registry[k];
+        }
+      }
+    } catch (e) {
+      console.warn("[XMPP] Failed to prune Strophe.SASLMechanisms (ignored)", e);
+    }
+  }
+
   function installHandlersOnce(connection: any, Strophe: any) {
     if (handlersInstalledRef.current) return;
     handlersInstalledRef.current = true;
@@ -113,7 +149,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
       { matchBare: true }
     );
 
-    // Chat messages (direct DMs + possibly server echoes)
+    // Chat messages (direct DMs + MUC PMs)
     connection.addHandler(
       (stanza: Element) => onMessage(stanza, Strophe),
       null,
@@ -124,7 +160,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
       { matchBare: true }
     );
 
-    // Presence updates (filter to active room inside handler)
+    // Presence updates (we’ll filter to active room inside handler)
     connection.addHandler(
       (stanza: Element) => onPresence(stanza, Strophe),
       null,
@@ -203,6 +239,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
             .map((it) => it.getAttribute("jid") || "")
             .filter(Boolean)
             .map((jid) => {
+              // jid can be "room@conference.domain"
               const at = jid.indexOf("@");
               return at > 0 ? jid.slice(0, at) : jid;
             })
@@ -230,12 +267,14 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     const roomNode = (newRoom || "").trim();
     if (!roomNode) return;
 
+    // Ensure room is in list
     setRooms((prev) => {
       const s = new Set(prev.map((r) => r.name));
       s.add(roomNode);
       return Array.from(s).sort((a, b) => a.localeCompare(b)).map((name) => ({ name }));
     });
 
+    // Update UI target first
     setTarget({ kind: "room", room: roomNode });
     setMessages([]);
     setOccupants([]);
@@ -246,14 +285,19 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     const Strophe = StropheRef.current;
     if (!conn || !Strophe || !conn.connected) return;
 
+    // Leave old active room (if different)
     const oldRoom = activeRoomRef.current;
     if (oldRoom && oldRoom !== roomNode) {
       sendRoomLeave(conn, Strophe, oldRoom, currentNick);
     }
 
+    // Join new room
     sendRoomJoin(conn, Strophe, roomNode, currentNick);
+
+    // Kick a fresh disco too (optional)
     discoverRooms(conn, Strophe);
 
+    // Mobile UX
     setSidebarOpen(false);
   }
 
@@ -267,6 +311,8 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     setTarget({ kind: "dm", room: roomNode, nick: n, jid });
     setMessages([]);
     setError(null);
+
+    // Mobile UX: close drawer so chat is visible
     setSidebarOpen(false);
   }
 
@@ -306,25 +352,28 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     const t = targetRef.current;
 
-    // always show what we sent
+    // Always show what we sent immediately (bots are simple; echo behavior varies)
     appendOptimisticOutgoing(text);
 
-    // room: wait for join
+    // Room traffic: wait for join before sending
     if (t.kind === "room" && !joinedRef.current) {
       pendingRoomSendsRef.current.push(text);
       console.warn("[MUC] Not joined yet; queued room message");
       return;
     }
 
-    // dm: queue until join too (keeps behavior predictable)
+    // DM: can send even if not joined, but we keep same queue behavior to avoid surprises
     if (t.kind === "dm" && !joinedRef.current) {
       pendingDmSendsRef.current.push({ room: t.room, nick: t.nick, jid: t.jid, text });
       console.warn("[DM] Not joined yet; queued DM");
       return;
     }
 
-    if (t.kind === "room") sendGroupchat(conn, Strophe, t.room, text);
-    else sendDirectChat(conn, Strophe, t.jid, text);
+    if (t.kind === "room") {
+      sendGroupchat(conn, Strophe, t.room, text);
+    } else {
+      sendDirectChat(conn, Strophe, t.jid, text);
+    }
   }
 
   function onMessage(stanza: Element, Strophe: any) {
@@ -343,6 +392,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
       if (!safeLower(bareFrom).endsWith(`@${safeLower(mucDomain)}`)) return true;
 
       const roomNode = bareFrom.split("@")[0] || "";
+
       if (t.kind !== "room") return true;
       if (t.room !== roomNode) return true;
 
@@ -369,8 +419,12 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
       return true;
     }
 
-    // -------- chat (direct DM) --------
+    // -------- chat (direct DM + possibly MUC PM) --------
     if (type === "chat") {
+      // DM messages are typically from "user@domain[/resource]"
+      // We accept:
+      // - messages from the selected bot JID (bare match)
+      // - messages from ourselves to that JID (some servers echo)
       if (t.kind !== "dm") return true;
 
       const bareFrom = Strophe.getBareJidFromJid(from);
@@ -416,7 +470,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     const type = stanza.getAttribute("type") || "";
     if (!from) return true;
 
-    // room presence: room@conference.domain/nick
+    // Presence from rooms is "room@conference.domain/nick"
     const bareFrom = Strophe.getBareJidFromJid(from);
     const nick = Strophe.getResourceFromJid(from) || "";
     if (!nick) return true;
@@ -426,11 +480,12 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     const roomNode = bareFrom.split("@")[0] || "";
     const activeRoom = activeRoomRef.current;
 
+    // Only update occupant list for the active room
     if (roomNode !== activeRoom) return true;
 
     const online = type !== "unavailable";
 
-    // self-presence join confirmation (110)
+    // Join-confirmation (status code 110 on self presence)
     if (nick === currentNick && online) {
       const x = stanza.getElementsByTagNameNS("http://jabber.org/protocol/muc#user", "x")[0];
       if (x) {
@@ -442,7 +497,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
               console.log("[MUC] Join confirmed (self-presence 110) room=", activeRoom);
               setJoined(true);
 
-              // flush queued room
+              // Flush queued room sends
               const roomQueued = pendingRoomSendsRef.current.splice(0);
               roomQueued.forEach((text) => {
                 const conn = connectionRef.current;
@@ -450,7 +505,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                 if (conn && S && conn.connected) sendGroupchat(conn, S, activeRoomRef.current, text);
               });
 
-              // flush queued dm
+              // Flush queued DMs (after join, but these are direct)
               const dmQueued = pendingDmSendsRef.current.splice(0);
               dmQueued.forEach((q) => {
                 const conn = connectionRef.current;
@@ -489,7 +544,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     let mounted = true;
 
-    // reset UI state on open
+    // Reset UI state on open
     setError(null);
     setMessages([]);
     setOccupants([]);
@@ -498,7 +553,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     setConnectionState("disconnected");
     setRoomInput("");
 
-    // reset refs
+    // Reset refs
     handlersInstalledRef.current = false;
     joinedRef.current = false;
     activeRoomRef.current = XMPP_CONFIG.defaultRoom;
@@ -518,16 +573,10 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
         disableScramMechanismsIfNoWebCrypto(Strophe);
 
-        // ✅ KEY FIX: derive transport URLs from the page origin (tail domain vs xps.local)
-        const derived = deriveXmppTransportUrlsFromWindow();
-        const service = XMPP_CONFIG.useWebSocket ? derived.websocketUrl : derived.boshUrl;
+        const service = XMPP_CONFIG.useWebSocket ? XMPP_CONFIG.websocketUrl : XMPP_CONFIG.boshUrl;
 
-        console.log("[XMPP] page=", derived.origin);
-        console.log("[XMPP] derived ws=", derived.websocketUrl);
-        console.log("[XMPP] derived bosh=", derived.boshUrl);
         console.log("[XMPP] service=", service);
         console.log("[XMPP] jid=", myJid);
-        console.log("[XMPP] domain=", domain, "mucDomain=", mucDomain);
         console.log("[XMPP] webcrypto=", hasWebCryptoDeriveBits());
 
         const connection = new Strophe.Connection(service);
@@ -551,6 +600,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                 console.log("[XMPP] Connected");
                 sendPresenceAvailable(connection, Strophe);
 
+                // Discover rooms + join default room
                 discoverRooms(connection, Strophe);
 
                 const startRoom = activeRoomRef.current || XMPP_CONFIG.defaultRoom;
@@ -646,9 +696,12 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
         {/* Sidebar drawer (mobile) + fixed column (desktop) */}
         <div
           className={[
+            // desktop: normal left column
             "md:relative md:z-auto md:flex md:w-72 md:translate-x-0",
+            // mobile: drawer
             "fixed inset-y-0 left-0 z-50 w-72 transform transition-transform md:transform-none",
             sidebarOpen ? "translate-x-0" : "-translate-x-full",
+            // common styling
             "flex flex-col border-r border-gray-200 bg-gray-50",
           ].join(" ")}
         >
@@ -812,6 +865,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
           {/* Header */}
           <div className="border-b border-gray-200 bg-white px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
+              {/* Sidebar toggle (mobile) */}
               <button
                 onClick={() => setSidebarOpen((v) => !v)}
                 className="md:hidden rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50"
@@ -904,12 +958,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
                 className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
+                onKeyDown={handleKeyDown}
                 disabled={connectionState !== "connected"}
               />
               <button

@@ -1,5 +1,30 @@
-https://xps.local {
-  tls /certs/xps.local.pem /certs/xps.local-key.pem
-  reverse_proxy 0.0.0.0:3000
+{
+  # debug
 }
 
+# --- Shared route blocks ---
+(prosody_routes) {
+  # Prosody BOSH
+  handle /http-bind* {
+    reverse_proxy 127.0.0.1:5280
+  }
+
+  # Prosody XMPP WebSocket
+  handle /xmpp-websocket* {
+    reverse_proxy 127.0.0.1:5280
+  }
+}
+
+# Local LAN name
+xps.local {
+  tls /certs/xps.local.pem /certs/xps.local-key.pem
+  import prosody_routes
+  reverse_proxy 127.0.0.1:3000
+}
+
+# Tailscale HTTPS name
+xps.tail9babd7.ts.net {
+  tls /certs/xps.tail9babd7.ts.net.crt /certs/xps.tail9babd7.ts.net.key
+  import prosody_routes
+  reverse_proxy 127.0.0.1:3000
+}
