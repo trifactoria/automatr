@@ -1,42 +1,93 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-NAME="automatr-prosody"
-IMAGE="prosody/prosody:latest"
-DOMAIN="${AUTOMATR_XMPP_DOMAIN:-automatr-xmpp.local}"
-CFG="$(pwd)/config/prosody/prosody.cfg.lua"
-VOL="automatr-prosody-data"
+NAME="${AUTOMATR_PROSODY_NAME:-automatr-prosody}"
+IMAGE="${AUTOMATR_PROSODY_IMAGE:-prosody/prosody:latest}"
 
-# Network to use (default: automatr-net)
-NET="${DOCKER_NETWORK:-automatr-net}"
-ALIAS="${DOMAIN}"
+# IMPORTANT: domain is the XMPP VirtualHost (JIDs use this), NOT your machine hostname.
+DOMAIN="${AUTOMATR_XMPP_DOMAIN:-xps.local}"
 
-if [[ ! -f "$CFG" ]]; then
-  echo "Missing prosody config: $CFG" >&2
-  exit 1
-fi
+# docker network (match app.py)
+NET="${AUTOMATR_DOCKER_NETWORK:-automatr-net}"
 
-# If it's already running, do nothing
+# ports
+C2S_PORT="${AUTOMATR_PROSODY_PORT:-5222}"
+HTTP_PORT="${AUTOMATR_PROSODY_HTTP_PORT:-5280}"
+HTTPS_PORT="${AUTOMATR_PROSODY_HTTPS_PORT:-5281}"
+
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CFG_DIR="$ROOT/config/prosody"
+DATA_DIR="${AUTOMATR_PROSODY_DATA_DIR:-$ROOT/data/prosody}"
+CERT_DIR="$DATA_DIR/certs"
+
+mkdir -p "$DATA_DIR" "$CERT_DIR"
+
 if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
-  echo "$NAME already running"
+  echo "Prosody already running: $NAME"
   exit 0
 fi
 
-# If container exists but is stopped, start it
+# If container exists but stopped, remove it so config/env changes apply cleanly
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
-  docker start "$NAME" >/dev/null
-  echo "Started existing $NAME"
-  exit 0
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
 fi
+
+echo "Starting Prosody:"
+echo "  name=$NAME"
+echo "  domain=$DOMAIN"
+echo "  net=$NET"
+echo "  c2s_port=$C2S_PORT http_port=$HTTP_PORT"
 
 docker run -d \
   --name "$NAME" \
   --network "$NET" \
-  --network-alias "$ALIAS" \
-  -p 5222:5222 \
-  -p 5280:5280 \
-  -v "$CFG:/etc/prosody/prosody.cfg.lua:ro" \
-  -v "$VOL:/var/lib/prosody" \
-  "$IMAGE"
+  -p "${C2S_PORT}:5222" \
+  -p "${HTTP_PORT}:5280" \
+  -p "${HTTPS_PORT}:5281" \
+  -e "AUTOMATR_XMPP_DOMAIN=$DOMAIN" \
+  -v "$CFG_DIR/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro" \
+  -v "$DATA_DIR:/var/lib/prosody:rw" \
+  -v "$CERT_DIR:/etc/prosody/certs:rw" \
+  "$IMAGE" >/dev/null
 
-echo "Prosody is up: $NAME (domain: $DOMAIN, net: $NET, alias: $ALIAS)"
+# Give it a moment to come up
+sleep 0.8
+
+# Generate a self-signed cert w/ SANs (fixes "legacy CN" errors)
+docker exec -u 0 "$NAME" sh -lc "
+set -e
+DOMAIN='${DOMAIN}'
+CRT=\"/etc/prosody/certs/\$DOMAIN.crt\"
+KEY=\"/etc/prosody/certs/\$DOMAIN.key\"
+
+if [ ! -s \"\$CRT\" ] || [ ! -s \"\$KEY\" ]; then
+  echo \"[prosody-up] generating cert for \$DOMAIN (with SANs)\"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      -keyout \"\$KEY\" \
+      -out \"\$CRT\" \
+      -subj \"/CN=\$DOMAIN\" \
+      -addext \"subjectAltName=DNS:\$DOMAIN,DNS:conference.\$DOMAIN\"
+    chmod 600 \"\$KEY\" || true
+  else
+    echo \"[prosody-up] WARNING: openssl not present in image; TLS cert not generated\"
+  fi
+fi
+"
+
+docker exec -u 0 automatr-prosody sh -lc '
+set -eux
+DOMAIN="${AUTOMATR_XMPP_DOMAIN:-xps.local}"
+for d in "$DOMAIN" "conference.$DOMAIN"; do
+  crt="/etc/prosody/certs/$d.crt"
+  key="/etc/prosody/certs/$d.key"
+  if [ -f "$crt" ] && [ -f "$key" ]; then
+    chown prosody:prosody "$crt" "$key" || true
+    chmod 644 "$crt" || true
+    chmod 640 "$key" || true
+  fi
+done
+'
+
+echo "Prosody started: $NAME"

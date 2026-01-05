@@ -13,71 +13,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import importlib.util
-import inspect
-
 import docker
 from docker.errors import APIError, NotFound
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import db
+from automatr_config import AutomatrConfig, load_config
 
 
-def get_env(key: str, default: str = "") -> str:
-    return os.getenv(key, default)
-
-
-# Host API
-AUTOMATR_HOST = get_env("AUTOMATR_HOST", "127.0.0.1")
-AUTOMATR_PORT = int(get_env("AUTOMATR_PORT", "8766"))
-
-# IMPORTANT: PROJECT_ROOT must be stable (don't rely on cwd drifting)
-PROJECT_ROOT = Path(get_env("AUTOMATR_PROJECT_ROOT", str(Path(__file__).resolve().parent))).resolve()
-DATA_DIR = Path(get_env("AUTOMATR_DATA_DIR", str(PROJECT_ROOT / "data"))).resolve()
-DB_PATH = Path(get_env("AUTOMATR_DB_PATH", str(DATA_DIR / "automatr.db"))).resolve()
-
-BIN_DIR = PROJECT_ROOT / "bin"
-EXPORT_PY = Path(get_env("AUTOMATR_EXPORT_PY", str(BIN_DIR / "export.py"))).resolve()
-BIN_CONTAINERS_DIR = Path(get_env("AUTOMATR_BIN_CONTAINERS_DIR", str(BIN_DIR / "containers"))).resolve()
-
-# Docker
-RUNTIME_IMAGE = get_env("AUTOMATR_RUNTIME_IMAGE", "automatr-runtime:dev")
-DOCKER_NETWORK = get_env("AUTOMATR_DOCKER_NETWORK", "")
-
-# Screen
-SCREEN_W = get_env("AUTOMATR_SCREEN_W", "1366")
-SCREEN_H = get_env("AUTOMATR_SCREEN_H", "768")
-SCREEN_D = get_env("AUTOMATR_SCREEN_D", "24")
-
-# noVNC
-NOVNC_PORT_BASE = int(get_env("AUTOMATR_NOVNC_PORT_BASE", "6100"))
-NOVNC_PATH = get_env("AUTOMATR_NOVNC_PATH", "/vnc.html?autoconnect=1&resize=remote")
-
-# Container internal paths
-CONTAINER_ROOT = get_env("AUTOMATR_CONTAINER_ROOT", "/automatr")
-QUEUE_DIR = get_env("AUTOMATR_QUEUE_DIR", "/automatr/queue")
-
-# CORS
-CORS_ORIGINS = get_env("AUTOMATR_CORS_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000")
-
-# Host notifications
-HOST_NOTIFY_BIN = get_env("AUTOMATR_HOST_NOTIFY_BIN", "notify-send")
-HOST_NOTIFY_POLL = float(get_env("AUTOMATR_HOST_NOTIFY_POLL", "0.2"))
-
-
-# Ensure base dirs
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-BIN_CONTAINERS_DIR.mkdir(parents=True, exist_ok=True)
-
-# ---------- XMPP (agent bots) ----------
-XMPP_DOMAIN = get_env("AUTOMATR_XMPP_DOMAIN", "automatr-xmpp.local")
-XMPP_HOST = get_env("AUTOMATR_XMPP_HOST", "automatr-prosody")
-XMPP_PORT = get_env("AUTOMATR_XMPP_PORT", "5222")
-XMPP_MUC = get_env("AUTOMATR_XMPP_MUC", f"automatr@conference.{XMPP_DOMAIN}")
-XMPP_PASSWORD = get_env("AUTOMATR_XMPP_PASSWORD", "supersecret")
-XMPP_INSECURE = get_env("AUTOMATR_XMPP_INSECURE_TLS", "1")
-
+cfg: AutomatrConfig = load_config()
 
 # Ensure DB exists/initialized (db.py uses env AUTOMATR_DB_PATH)
 db.init_db()
@@ -86,7 +31,7 @@ docker_client = docker.from_env()
 
 # Runtime registry: db container name -> {container_id, container_name, novnc_port}
 _RUNTIME: dict[str, dict] = {}
-_NEXT_PORT = NOVNC_PORT_BASE
+_NEXT_PORT = cfg.novnc_port_base
 
 
 def allocate_port() -> int:
@@ -98,7 +43,7 @@ def allocate_port() -> int:
 
 # ---------- canonical host paths ----------
 def container_mount_root(name: str) -> Path:
-    return DATA_DIR / name
+    return cfg.data_dir / name
 
 
 def container_dir(name: str) -> Path:
@@ -122,24 +67,28 @@ def stop_file(name: str) -> Path:
 
 
 def metadata_path(name: str) -> Path:
-    return BIN_CONTAINERS_DIR / name / "metadata.json"
+    return cfg.bin_containers_dir / name / "metadata.json"
 
 
 # ---------- input recorder (host-managed) ----------
 def input_recorder_pid_path(name: str) -> Path:
     return container_dir(name) / "pid" / "input_recorder.pid"
 
+
 def input_events_log_path(name: str) -> Path:
     return container_dir(name) / "logs" / "input_events.jsonl"
 
+
 def input_recorder_runner_log_path(name: str) -> Path:
     return container_dir(name) / "logs" / "input_recorder_runner.log"
+
 
 # ---------- logs ----------
 def automation_log_path(name: str, date_ymd: str) -> Path:
     # runner.py writes to /automatr/logs/YYYY-MM-DD.log (UTC date)
     # host bind-mount: data/{name}/logs/YYYY-MM-DD.log
     return container_dir(name) / "logs" / f"{date_ymd}.log"
+
 
 def _read_pid_file(p: Path) -> Optional[int]:
     try:
@@ -149,6 +98,37 @@ def _read_pid_file(p: Path) -> Optional[int]:
         return int(s)
     except Exception:
         return None
+
+
+def docker_name(name: str) -> str:
+    return f"automatr-{name}"
+
+
+def docker_exec(container_name: str, argv: list[str], timeout: int = 2) -> tuple[int, str]:
+    cmd = ["docker", "exec", container_name] + argv
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = (cp.stdout or "") + (cp.stderr or "")
+        return cp.returncode, out
+    except Exception as e:
+        return 99, str(e)
+
+
+def is_container_running(name: str) -> bool:
+    if name not in _RUNTIME:
+        return False
+    cid = _RUNTIME[name].get("container_id")
+    if not cid:
+        return False
+    try:
+        c = docker_client.containers.get(cid)
+        return c.status == "running"
+    except NotFound:
+        _RUNTIME.pop(name, None)
+        return False
+    except Exception:
+        return False
+
 
 def _recorder_is_running(name: str) -> tuple[bool, Optional[int]]:
     """
@@ -160,14 +140,13 @@ def _recorder_is_running(name: str) -> tuple[bool, Optional[int]]:
         return False, None
 
     if not is_container_running(name):
-        # container down => recorder not running; keep pidfile? better to remove stale
+        # container down => recorder not running; remove stale pidfile
         try:
             pidfile.unlink()
         except Exception:
             pass
         return False, None
 
-    # check inside container if pid exists
     cname = docker_name(name)
     rc, _out = docker_exec(cname, ["sh", "-lc", f"kill -0 {pid} >/dev/null 2>&1"], timeout=2)
     if rc == 0:
@@ -179,6 +158,7 @@ def _recorder_is_running(name: str) -> tuple[bool, Optional[int]]:
     except Exception:
         pass
     return False, None
+
 
 def _tail_lines(p: Path, n: int) -> list[str]:
     if n <= 0:
@@ -222,9 +202,7 @@ def write_container_metadata(name: str, description: str) -> None:
     if "created_at" not in data:
         data["created_at"] = datetime.utcnow().isoformat() + "Z"
 
-    # Always update description to the latest provided value
     data["description"] = (description or "").strip()
-
     mp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
@@ -249,34 +227,14 @@ def is_container_busy(name: str) -> tuple[bool, Optional[str]]:
         return True, None
 
 
-def docker_name(name: str) -> str:
-    return f"automatr-{name}"
+def clear_stop(name: str) -> None:
+    sf = stop_file(name)
+    if sf.exists():
+        sf.unlink()
 
 
-def is_container_running(name: str) -> bool:
-    if name not in _RUNTIME:
-        return False
-    cid = _RUNTIME[name].get("container_id")
-    if not cid:
-        return False
-    try:
-        c = docker_client.containers.get(cid)
-        return c.status == "running"
-    except NotFound:
-        _RUNTIME.pop(name, None)
-        return False
-    except Exception:
-        return False
-
-
-def docker_exec(container_name: str, argv: list[str], timeout: int = 2) -> tuple[int, str]:
-    cmd = ["docker", "exec", container_name] + argv
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        out = (cp.stdout or "") + (cp.stderr or "")
-        return cp.returncode, out
-    except Exception as e:
-        return 99, str(e)
+def set_stop(name: str) -> None:
+    stop_file(name).write_text("", encoding="utf-8")
 
 
 def _load_automatr_actions_module():
@@ -284,7 +242,7 @@ def _load_automatr_actions_module():
     Load host-side bin/automatr_actions.py dynamically.
     We do this so the API can expose action schema without importing project packages.
     """
-    actions_path = (BIN_DIR / "automatr_actions.py").resolve()
+    actions_path = (cfg.bin_dir / "automatr_actions.py").resolve()
     if not actions_path.exists():
         raise FileNotFoundError(f"automatr_actions.py not found at {actions_path}")
 
@@ -303,17 +261,13 @@ def _actions_schema_from_module(mod) -> dict:
     for name, obj in vars(mod).items():
         if not (callable(obj) and inspect.isfunction(obj)):
             continue
-
-        # Public API surface rule: user-callable actions DO NOT start with "_"
         if name.startswith("_") or name.startswith("__"):
             continue
 
         sig = inspect.signature(obj)
         params_out = []
         for pname, p in sig.parameters.items():
-            # We treat everything as keyword-friendly (your DB stores key/type/value anyway)
             ann = None if p.annotation is inspect._empty else p.annotation
-            # Normalize annotation to a simple string when possible
             if ann is None:
                 ptype = None
             elif isinstance(ann, type):
@@ -327,10 +281,10 @@ def _actions_schema_from_module(mod) -> dict:
             params_out.append(
                 {
                     "name": pname,
-                    "type": ptype,               # e.g. "str", "float", etc. (or None)
-                    "required": not has_default, # required if no default
-                    "default": default_val,      # JSON-serializable if simple
-                    "kind": str(p.kind).split(".")[-1],  # POSITIONAL_OR_KEYWORD, etc.
+                    "type": ptype,
+                    "required": not has_default,
+                    "default": default_val,
+                    "kind": str(p.kind).split(".")[-1],
                 }
             )
 
@@ -340,31 +294,21 @@ def _actions_schema_from_module(mod) -> dict:
     return schema
 
 
-def clear_stop(name: str) -> None:
-    sf = stop_file(name)
-    if sf.exists():
-        sf.unlink()
-
-
-def set_stop(name: str) -> None:
-    stop_file(name).write_text("", encoding="utf-8")
-
-
 def export_automation(container: str, automation: str) -> tuple[bool, str]:
     """
     Calls: bin/export.py <container> <automation>
     """
-    if not EXPORT_PY.exists():
-        return False, f"export.py not found at {EXPORT_PY}"
+    if not cfg.export_py.exists():
+        return False, f"export.py not found at {cfg.export_py}"
 
     env = os.environ.copy()
-    env["AUTOMATR_PROJECT_ROOT"] = str(PROJECT_ROOT)
-    env["AUTOMATR_DATA_DIR"] = str(DATA_DIR)
-    env["AUTOMATR_DB_PATH"] = str(DB_PATH)
+    env["AUTOMATR_PROJECT_ROOT"] = str(cfg.project_root)
+    env["AUTOMATR_DATA_DIR"] = str(cfg.data_dir)
+    env["AUTOMATR_DB_PATH"] = str(cfg.db_path)
 
     try:
         cp = subprocess.run(
-            [sys.executable, str(EXPORT_PY), container, automation],
+            [sys.executable, str(cfg.export_py), container, automation],
             capture_output=True,
             text=True,
             env=env,
@@ -381,35 +325,29 @@ _NOTIFY_THREAD_STARTED = False
 
 def _host_notify(title: str, msg: str) -> None:
     try:
-        subprocess.run([HOST_NOTIFY_BIN, title, msg], check=False)
+        subprocess.run([cfg.host_notify_bin, title, msg], check=False)
     except Exception:
         pass
 
 
 def _consume_notify_queue_forever(stop_evt: threading.Event) -> None:
-    # Poll all containers’ notify.queue dirs
     while not stop_evt.is_set():
         try:
-            if DATA_DIR.exists():
-                for d in DATA_DIR.iterdir():
+            if cfg.data_dir.exists():
+                for d in cfg.data_dir.iterdir():
                     if not d.is_dir():
                         continue
                     qdir = d / "notify.queue"
                     if not qdir.exists():
                         continue
-
-                    # process oldest first for sanity
                     files = sorted(qdir.glob("*.txt"), key=lambda p: p.stat().st_mtime)
                     for p in files:
                         try:
                             txt = p.read_text(encoding="utf-8", errors="replace").splitlines()
                             title = (txt[0].strip() if len(txt) >= 1 and txt[0].strip() else "AUTOMATR")
-                            msg = ""
-                            if len(txt) >= 2:
-                                msg = "\n".join(txt[1:]).strip()
+                            msg = "\n".join(txt[1:]).strip() if len(txt) >= 2 else ""
                             _host_notify(title, msg)
                         finally:
-                            # always delete so it doesn't spam forever
                             try:
                                 p.unlink()
                             except FileNotFoundError:
@@ -417,15 +355,15 @@ def _consume_notify_queue_forever(stop_evt: threading.Event) -> None:
         except Exception:
             pass
 
-        time.sleep(HOST_NOTIFY_POLL)
+        time.sleep(cfg.host_notify_poll)
 
 
+# ---------------- FastAPI ----------------
 app = FastAPI(title="Automatr Host API", version="0.2.2")
 
-origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=cfg.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -487,10 +425,7 @@ def create_container(payload: dict):
 
     db.create_container(name, desc)
     ensure_container_fs(name)
-
-    # Metadata is the durable place for container description.
     write_container_metadata(name, desc)
-
     return {"ok": True}
 
 
@@ -505,38 +440,46 @@ def _start_container_impl(name: str) -> tuple[bool, str]:
         novnc_port = allocate_port()
         cname = docker_name(name)
 
+        # Env injected into runtime container:
+        # - XMPP derived from AUTOMATR_HOST via cfg (domain) + docker-internal (host)
+        # - API base so agents can phone home
         environment = {
             "AUTOMATR_CONTAINER_NAME": name,
-            "AUTOMATR_CONTAINER_ROOT": CONTAINER_ROOT,
-            "AUTOMATR_QUEUE_DIR": QUEUE_DIR,
-            "AUTOMATR_SCREEN_W": SCREEN_W,
-            "AUTOMATR_SCREEN_H": SCREEN_H,
-            "AUTOMATR_SCREEN_D": SCREEN_D,
+            "AUTOMATR_AGENT_NAME": "agent-" + name,
+            "AUTOMATR_AGENT_JID": "agent-" + name + "@" + cfg.xmpp_domain,
+            "AUTOMATR_CONTAINER_ROOT": cfg.container_root,
+            "AUTOMATR_QUEUE_DIR": cfg.queue_dir,
+            "AUTOMATR_SCREEN_W": cfg.screen_w,
+            "AUTOMATR_SCREEN_H": cfg.screen_h,
+            "AUTOMATR_SCREEN_D": cfg.screen_d,
             "DISPLAY": ":99",
-            # agent bot identity + xmpp routing
             "AUTOMATR_NODE": name,
-            "AUTOMATR_XMPP_DOMAIN": XMPP_DOMAIN,
-            "AUTOMATR_XMPP_HOST": XMPP_HOST,
-            "AUTOMATR_XMPP_PORT": str(XMPP_PORT),
-            "AUTOMATR_XMPP_MUC": XMPP_MUC,
-            "AUTOMATR_XMPP_PASSWORD": XMPP_PASSWORD,
-            "AUTOMATR_XMPP_INSECURE_TLS": XMPP_INSECURE,
+            "AUTOMATR_XMPP_DOMAIN": cfg.xmpp_domain,
+            "AUTOMATR_XMPP_HOST": cfg.xmpp_host,
+            "AUTOMATR_XMPP_PORT": str(cfg.xmpp_port),
+            "AUTOMATR_XMPP_MUC": cfg.xmpp_muc,
+            "AUTOMATR_XMPP_PASSWORD": cfg.xmpp_password,
+            "AUTOMATR_XMPP_INSECURE_TLS": cfg.xmpp_insecure,
+            # "This runs here" info
+            "AUTOMATR_HOST": cfg.host,
+            "AUTOMATR_PORT": str(cfg.port),
+            "AUTOMATR_API_BASE": cfg.api_base,
         }
 
-        volumes = {str(container_dir(name)): {"bind": CONTAINER_ROOT, "mode": "rw"}}
+        volumes = {str(container_dir(name)): {"bind": cfg.container_root, "mode": "rw"}}
         ports = {"6080/tcp": novnc_port}
 
         run_kwargs = {
             "name": cname,
-            "image": RUNTIME_IMAGE,
+            "image": cfg.runtime_image,
             "detach": True,
             "auto_remove": False,
             "environment": environment,
             "volumes": volumes,
             "ports": ports,
         }
-        if DOCKER_NETWORK:
-            run_kwargs["network"] = DOCKER_NETWORK
+        if cfg.docker_network:
+            run_kwargs["network"] = cfg.docker_network
 
         container = docker_client.containers.run(**run_kwargs)
         _RUNTIME[name] = {"container_id": container.id, "container_name": cname, "novnc_port": novnc_port}
@@ -588,7 +531,6 @@ def restart_container(name: str):
     if not db.container_exists(name):
         return {"ok": False, "error": "not_found"}
 
-    # If running, stop first. If not running, treat stop as no-op.
     if is_container_running(name) or name in _RUNTIME:
         _stop_container_impl(name)
 
@@ -604,8 +546,18 @@ def container_vnc_url(name: str):
         return {"ok": False, "error": "not_found"}
     if not is_container_running(name):
         return {"ok": False, "error": "not_running"}
-    novnc_port = _RUNTIME[name]["novnc_port"]
-    url = f"http://{AUTOMATR_HOST}:{novnc_port}{NOVNC_PATH}"
+
+    # Caddy routes by Docker DNS name on the automatr network:
+    #   /c/<container>/vnc.html -> http://<container>:6080/vnc.html
+    docker_name = f"automatr-{name}"
+
+    # If AUTOMATR_PUBLIC_BASE is set, return absolute URL for the correct host
+    # (xps.local / tailscale). Otherwise return a relative path.
+    if getattr(cfg, "public_base", ""):
+        url = f"{cfg.public_base}/c/{docker_name}{cfg.novnc_path}"
+    else:
+        url = f"/c/{docker_name}{cfg.novnc_path}"
+
     return {"url": url, "view_only": True}
 
 
@@ -671,7 +623,7 @@ def delete_automation(name: str):
 
 
 def _load_actions_module() -> tuple[Optional[object], str]:
-    actions_path = BIN_DIR / "automatr_actions.py"
+    actions_path = cfg.bin_dir / "automatr_actions.py"
     if not actions_path.exists():
         return None, f"missing:{actions_path}"
     try:
@@ -693,7 +645,6 @@ def actions_check():
 
     public: list[str] = []
     for name, obj in inspect.getmembers(mod):
-        # rule: user-facing actions do NOT start with underscore
         if name.startswith("_"):
             continue
         if inspect.isfunction(obj):
@@ -794,13 +745,11 @@ def get_container(name: str):
     busy, busy_automation = is_container_busy(name)
     stop_latched = stop_file(name).exists()
 
-    # Optional: include vnc_url if running
     vnc_url = None
-    if running and name in _RUNTIME and _RUNTIME[name].get("novnc_port"):
-        novnc_port = _RUNTIME[name]["novnc_port"]
-        vnc_url = f"http://{AUTOMATR_HOST}:{novnc_port}{NOVNC_PATH}"
+    if running:
+        auto_name = f"automatr-{name}"
+        vnc_url = f"/c/{auto_name}/vnc.html?autoconnect=1&resize=remote&path=c/{auto_name}/websockify"
 
-    # Optional: include run.lock contents if present
     run_lock_data = None
     lf = run_lock(name)
     if lf.exists():
@@ -856,8 +805,6 @@ def input_start(name: str):
 
     cname = docker_name(name)
 
-    # Start recorder in background, record pid.
-    # Note: we rely on the recorder writing to /automatr/logs/input_events.jsonl itself.
     cmd = (
         "mkdir -p /automatr/pid /automatr/logs; "
         "nohup /usr/bin/automatr-input-recorder "
@@ -868,7 +815,6 @@ def input_start(name: str):
     if rc != 0:
         return {"ok": False, "error": "start_failed", "detail": out}
 
-    # Verify
     running, pid = _recorder_is_running(name)
     return {"ok": True, "running": running, "pid": pid}
 
@@ -884,12 +830,10 @@ def input_stop(name: str):
 
     cname = docker_name(name)
 
-    # Try TERM, then KILL
     docker_exec(cname, ["sh", "-lc", f"kill -TERM {pid} >/dev/null 2>&1 || true"], timeout=2)
     time.sleep(0.1)
     docker_exec(cname, ["sh", "-lc", f"kill -KILL {pid} >/dev/null 2>&1 || true"], timeout=2)
 
-    # Remove pidfile on host (bind-mounted)
     try:
         input_recorder_pid_path(name).unlink()
     except Exception:
@@ -920,7 +864,6 @@ def input_events(name: str, tail: int = 200, parse: int = 1):
     p = input_events_log_path(name)
     lines = _tail_lines(p, int(tail))
 
-    # Optional: return parsed JSON too
     events = []
     if int(parse) == 1:
         for ln in lines:
@@ -934,9 +877,6 @@ def input_events(name: str, tail: int = 200, parse: int = 1):
 
 @app.get("/containers/{name}/logs/startup")
 def logs_startup(name: str, tail: int = 200, timestamps: int = 0):
-    """
-    Startup logs = docker logs for the container (works even if container is stopped).
-    """
     if not db.container_exists(name):
         return {"ok": False, "error": "not_found"}
 
@@ -947,8 +887,6 @@ def logs_startup(name: str, tail: int = 200, timestamps: int = 0):
 
     if tail_i <= 0:
         return {"ok": False, "error": "bad_tail"}
-
-    # Cap to prevent huge responses
     if tail_i > 5000:
         tail_i = 5000
 
@@ -957,13 +895,11 @@ def logs_startup(name: str, tail: int = 200, timestamps: int = 0):
     try:
         c = docker_client.containers.get(cname)
     except NotFound:
-        # DB says container exists but docker container missing
         return {"ok": False, "error": "docker_not_found"}
     except Exception as e:
         return {"ok": False, "error": "docker_error", "detail": str(e)}
 
     try:
-        # docker-py: timestamps=True prefixes each line with timestamp
         use_ts = int(timestamps) == 1
         raw = c.logs(tail=tail_i, timestamps=use_ts)
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
@@ -975,11 +911,6 @@ def logs_startup(name: str, tail: int = 200, timestamps: int = 0):
 
 @app.get("/containers/{name}/logs/automation")
 def logs_automation(name: str, date: str | None = None, tail: int = 400):
-    """
-    Automation logs = runner-produced file in bind-mounted host data dir:
-      data/{name}/logs/YYYY-MM-DD.log
-    Date is UTC (runner uses UTC in filenames).
-    """
     if not db.container_exists(name):
         return {"ok": False, "error": "not_found"}
 
@@ -990,16 +921,13 @@ def logs_automation(name: str, date: str | None = None, tail: int = 400):
 
     if tail_i <= 0:
         return {"ok": False, "error": "bad_tail"}
-
     if tail_i > 5000:
         tail_i = 5000
 
-    # Default date is today UTC (matches runner.py naming)
     if not date:
         date_ymd = datetime.utcnow().strftime("%Y-%m-%d")
     else:
         date_ymd = str(date).strip()
-        # Validate YYYY-MM-DD
         try:
             datetime.strptime(date_ymd, "%Y-%m-%d")
         except Exception:
@@ -1018,4 +946,3 @@ def logs_automation(name: str, date: str | None = None, tail: int = 400):
         "path": str(p),
         "lines": lines,
     }
-

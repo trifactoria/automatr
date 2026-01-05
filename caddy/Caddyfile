@@ -1,0 +1,49 @@
+{
+  # debug
+}
+
+(prosody_routes) {
+  handle /http-bind* {
+    reverse_proxy automatr-prosody:5280
+  }
+
+  handle /xmpp-websocket* {
+    reverse_proxy automatr-prosody:5280
+  }
+}
+
+(handle_novnc) {
+  # /c/<container>/<path>  ->  http://<container>:6080/<path>
+  @novnc path_regexp novnc ^/c/([^/]+)(/.*)$
+
+  handle @novnc {
+    rewrite * {http.regexp.novnc.2}{?query}
+    reverse_proxy {http.regexp.novnc.1}:6080
+  }
+}
+
+xps.local {
+  tls internal
+  import prosody_routes
+  import handle_novnc
+  reverse_proxy host.docker.internal:3000
+}
+
+xps.tail9babd7.ts.net {
+  tls internal
+  handle_path /api/* {
+    reverse_proxy host.docker.internal:8766
+  }
+  import prosody_routes
+  import handle_novnc
+  reverse_proxy host.docker.internal:3000
+}
+
+localhost {
+  tls internal
+  import prosody_routes
+  import handle_novnc
+  reverse_proxy host.docker.internal:3000
+}
+
+
