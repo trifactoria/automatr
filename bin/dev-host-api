@@ -10,7 +10,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-HOST="${AUTOMATR_HOST:-127.0.0.1}"
+HOST="${AUTOMATR_API_HOST:-127.0.0.1}"
 PORT="${AUTOMATR_PORT:-8766}"
 
 # Default: NO reload (exports touch generated files and can cause restarts).
