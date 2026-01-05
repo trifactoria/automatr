@@ -31,7 +31,19 @@ xps.local {
 
 xps.tail9babd7.ts.net {
   tls internal
+  handle_path /api/* {
+    reverse_proxy host.docker.internal:8766
+  }
   import prosody_routes
   import handle_novnc
   reverse_proxy host.docker.internal:3000
 }
+
+localhost {
+  tls internal
+  import prosody_routes
+  import handle_novnc
+  reverse_proxy host.docker.internal:3000
+}
+
+

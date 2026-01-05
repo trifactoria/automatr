@@ -546,8 +546,18 @@ def container_vnc_url(name: str):
         return {"ok": False, "error": "not_found"}
     if not is_container_running(name):
         return {"ok": False, "error": "not_running"}
-    novnc_port = _RUNTIME[name]["novnc_port"]
-    url = f"http://{cfg.host}:{novnc_port}{cfg.novnc_path}"
+
+    # Caddy routes by Docker DNS name on the automatr network:
+    #   /c/<container>/vnc.html -> http://<container>:6080/vnc.html
+    docker_name = f"automatr-{name}"
+
+    # If AUTOMATR_PUBLIC_BASE is set, return absolute URL for the correct host
+    # (xps.local / tailscale). Otherwise return a relative path.
+    if getattr(cfg, "public_base", ""):
+        url = f"{cfg.public_base}/c/{docker_name}{cfg.novnc_path}"
+    else:
+        url = f"/c/{docker_name}{cfg.novnc_path}"
+
     return {"url": url, "view_only": True}
 
 
@@ -736,9 +746,9 @@ def get_container(name: str):
     stop_latched = stop_file(name).exists()
 
     vnc_url = None
-    if running and name in _RUNTIME and _RUNTIME[name].get("novnc_port"):
-        novnc_port = _RUNTIME[name]["novnc_port"]
-        vnc_url = f"http://{cfg.host}:{novnc_port}{cfg.novnc_path}"
+    if running:
+        auto_name = f"automatr-{name}"
+        vnc_url = f"/c/{auto_name}/vnc.html?autoconnect=1&resize=remote&path=c/{auto_name}/websockify"
 
     run_lock_data = None
     lf = run_lock(name)

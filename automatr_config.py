@@ -65,6 +65,7 @@ class AutomatrConfig:
     host: str
     port: int
     api_base: str  # http://{host}:{port}
+    public_base: str
 
     # Project paths
     project_root: Path
@@ -116,6 +117,7 @@ def load_config() -> AutomatrConfig:
     host = normalize_host(_env("AUTOMATR_HOST", "127.0.0.1"))
     port = _env_int("AUTOMATR_PORT", 8766)
     api_base = _env("AUTOMATR_API_BASE", "") or f"http://{host}:{port}"
+    public_base = _env("AUTOMATR_PUBLIC_BASE", "https://xps.local")
 
     # IMPORTANT: PROJECT_ROOT must be stable (don't rely on cwd drifting)
     project_root = Path(_env("AUTOMATR_PROJECT_ROOT", str(Path(__file__).resolve().parent))).resolve()
@@ -134,7 +136,7 @@ def load_config() -> AutomatrConfig:
     screen_d = _env("AUTOMATR_SCREEN_D", "24")
 
     novnc_port_base = _env_int("AUTOMATR_NOVNC_PORT_BASE", 6100)
-    novnc_path = _env("AUTOMATR_NOVNC_PATH", "/vnc.html?autoconnect=1&resize=remote")
+    novnc_path = _env("AUTOMATR_NOVNC_PATH", "/vnc_lite.html?autoconnect=1&resize=remote&path=websockify")
 
     container_root = _env("AUTOMATR_CONTAINER_ROOT", "/automatr")
     queue_dir = _env("AUTOMATR_QUEUE_DIR", "/automatr/queue")
@@ -185,6 +187,7 @@ def load_config() -> AutomatrConfig:
         host=host,
         port=port,
         api_base=api_base,
+        public_base=public_base,
         project_root=project_root,
         data_dir=data_dir,
         db_path=db_path,
