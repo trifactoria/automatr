@@ -56,7 +56,7 @@ def load_cfg() -> Cfg:
     domain = env("AUTOMATR_XMPP_DOMAIN", "automatr-xmpp.local")
     host = env("AUTOMATR_XMPP_HOST", "automatr-prosody")
     port = int(env("AUTOMATR_XMPP_PORT", "5222"))
-    password = env("AUTOMATR_XMPP_PASSWORD", "supersecret")
+    password = env("AUTOMATR_XMPP_PASSWORD", "change-me-dev-only")
     room = env("AUTOMATR_XMPP_MUC", f"automatr@conference.{domain}")
     insecure_tls = env("AUTOMATR_XMPP_INSECURE_TLS", "0").lower() in ("1", "true", "yes", "on")
     node = derive_node_name()

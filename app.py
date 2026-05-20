@@ -73,7 +73,7 @@ XMPP_DOMAIN = get_env("AUTOMATR_XMPP_DOMAIN", "automatr-xmpp.local")
 XMPP_HOST = get_env("AUTOMATR_XMPP_HOST", "automatr-prosody")
 XMPP_PORT = get_env("AUTOMATR_XMPP_PORT", "5222")
 XMPP_MUC = get_env("AUTOMATR_XMPP_MUC", f"automatr@conference.{XMPP_DOMAIN}")
-XMPP_PASSWORD = get_env("AUTOMATR_XMPP_PASSWORD", "supersecret")
+XMPP_PASSWORD = get_env("AUTOMATR_XMPP_PASSWORD", "change-me-dev-only")
 XMPP_INSECURE = get_env("AUTOMATR_XMPP_INSECURE_TLS", "1")
 
 
