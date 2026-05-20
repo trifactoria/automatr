@@ -47,7 +47,7 @@ export const XMPP_CONFIG: XmppConfig = {
 
   // “Just make it work” creds (override via NEXT_PUBLIC_*)
   username: process.env.NEXT_PUBLIC_XMPP_USERNAME || "web",
-  password: process.env.NEXT_PUBLIC_XMPP_PASSWORD || "supersecret",
+  password: process.env.NEXT_PUBLIC_XMPP_PASSWORD || "change-me-dev-only",
 };
 
 export default XMPP_CONFIG;

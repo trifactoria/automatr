@@ -165,7 +165,7 @@ def load_config() -> AutomatrConfig:
     xmpp_host = _env("AUTOMATR_XMPP_HOST", "") or prosody_name
     xmpp_port = _env("AUTOMATR_XMPP_PORT", "5222")
     xmpp_muc = _env("AUTOMATR_XMPP_MUC", "") or f"automatr@conference.{xmpp_domain}"
-    xmpp_password = _env("AUTOMATR_XMPP_PASSWORD", "supersecret")
+    xmpp_password = _env("AUTOMATR_XMPP_PASSWORD", "change-me-dev-only")
     xmpp_insecure = _env("AUTOMATR_XMPP_INSECURE_TLS", "1")
 
     # Ensure base dirs

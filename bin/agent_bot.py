@@ -34,7 +34,7 @@ def _default_muc(domain: str) -> str:
 
 
 def _default_password() -> str:
-    return (os.getenv("AUTOMATR_XMPP_PASSWORD") or "supersecret").strip()
+    return (os.getenv("AUTOMATR_XMPP_PASSWORD") or "change-me-dev-only").strip()
 
 
 def _default_host() -> str:

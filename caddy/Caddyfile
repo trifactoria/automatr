@@ -29,7 +29,7 @@ xps.local {
   reverse_proxy host.docker.internal:3000
 }
 
-xps.tail9babd7.ts.net {
+example.ts.net {
   tls internal
   handle_path /api/* {
     reverse_proxy host.docker.internal:8766
