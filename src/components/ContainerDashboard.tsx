@@ -135,17 +135,16 @@ export function ContainerDashboard({
 
         {editorVisible ? (
           <div className="mt-4 rounded-xl border p-3 text-sm text-gray-500">
-            Editor panel placeholder (table rows go here).
+            Editor panel is handled by the main automation workspace.
           </div>
         ) : null}
 
         {loggerVisible ? (
           <div className="mt-4 rounded-xl border p-3 text-sm text-gray-500">
-            Logger placeholder (tail logs here).
+            Logs are available from the main automation workspace.
           </div>
         ) : null}
       </div>
     </div>
   );
 }
-

@@ -1,0 +1,4 @@
+docker>=7,<8
+fastapi>=0.115,<1
+slixmpp>=1.8,<2
+uvicorn[standard]>=0.32,<1
