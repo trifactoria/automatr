@@ -72,7 +72,7 @@ export function EditorTab({
       {/* Steps list */}
       {steps.length === 0 ? (
         <div className="rounded-lg border border-gray-300 bg-gray-50 p-8 text-center text-gray-500">
-          No steps defined. Click "Add Step" to get started.
+          No steps defined. Click &quot;Add Step&quot; to get started.
         </div>
       ) : (
         <div className="space-y-3">

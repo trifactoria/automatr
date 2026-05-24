@@ -11,6 +11,7 @@ import {
   nowId,
   safeLower,
 } from "@/lib/xmppStropheUtil";
+import type { Connection, Strophe as StropheClass } from "strophe.js";
 
 type Message = {
   id: string;
@@ -27,6 +28,7 @@ type Message = {
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 type Occupant = { nick: string; online: boolean };
 type RoomInfo = { name: string }; // node only
+type StropheApi = typeof StropheClass;
 
 type ChatTarget =
   | { kind: "room"; room: string }
@@ -55,8 +57,8 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
   });
 
   // Strophe refs
-  const connectionRef = useRef<any>(null);
-  const StropheRef = useRef<any>(null);
+  const connectionRef = useRef<Connection | null>(null);
+  const StropheRef = useRef<StropheApi | null>(null);
 
   // misc refs
   const handlersInstalledRef = useRef(false);
@@ -98,7 +100,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  function installHandlersOnce(connection: any, Strophe: any) {
+  function installHandlersOnce(connection: Connection, Strophe: StropheApi) {
     if (handlersInstalledRef.current) return;
     handlersInstalledRef.current = true;
 
@@ -136,11 +138,11 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     );
   }
 
-  function sendPresenceAvailable(connection: any, Strophe: any) {
+  function sendPresenceAvailable(connection: Connection, Strophe: StropheApi) {
     connection.send(new Strophe.Builder("presence").tree());
   }
 
-  function sendRoomJoin(connection: any, Strophe: any, roomNode: string, nick: string) {
+  function sendRoomJoin(connection: Connection, Strophe: StropheApi, roomNode: string, nick: string) {
     const roomJid = roomBareJidFor(roomNode);
     console.log("[MUC] Joining room", roomJid, "as", nick);
     const presence = new Strophe.Builder("presence", { to: `${roomJid}/${nick}` })
@@ -149,14 +151,14 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     connection.send(presence);
   }
 
-  function sendRoomLeave(connection: any, Strophe: any, roomNode: string, nick: string) {
+  function sendRoomLeave(connection: Connection, Strophe: StropheApi, roomNode: string, nick: string) {
     const roomJid = roomBareJidFor(roomNode);
     console.log("[MUC] Leaving room", roomJid, "as", nick);
     const presence = new Strophe.Builder("presence", { to: `${roomJid}/${nick}`, type: "unavailable" }).tree();
     connection.send(presence);
   }
 
-  function sendGroupchat(connection: any, Strophe: any, roomNode: string, text: string) {
+  function sendGroupchat(connection: Connection, Strophe: StropheApi, roomNode: string, text: string) {
     const roomJid = roomBareJidFor(roomNode);
     const msg = new Strophe.Builder("message", {
       to: roomJid,
@@ -170,7 +172,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     connection.send(msg);
   }
 
-  function sendDirectChat(connection: any, Strophe: any, toJid: string, text: string) {
+  function sendDirectChat(connection: Connection, Strophe: StropheApi, toJid: string, text: string) {
     const msg = new Strophe.Builder("message", {
       to: toJid,
       type: "chat",
@@ -183,7 +185,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     connection.send(msg);
   }
 
-  function discoverRooms(connection: any, Strophe: any) {
+  function discoverRooms(connection: Connection, Strophe: StropheApi) {
     const mucService = mucDomain;
 
     const iq = new Strophe.Builder("iq", {
@@ -327,7 +329,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     else sendDirectChat(conn, Strophe, t.jid, text);
   }
 
-  function onMessage(stanza: Element, Strophe: any) {
+  function onMessage(stanza: Element, Strophe: StropheApi) {
     const from = stanza.getAttribute("from") || "";
     const type = stanza.getAttribute("type") || "";
     const body = stanza.querySelector("body")?.textContent || "";
@@ -411,7 +413,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
     return true;
   }
 
-  function onPresence(stanza: Element, Strophe: any) {
+  function onPresence(stanza: Element, Strophe: StropheApi) {
     const from = stanza.getAttribute("from") || "";
     const type = stanza.getAttribute("type") || "";
     if (!from) return true;
@@ -512,7 +514,7 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
       .then((mod) => {
         if (!mounted) return;
 
-        const Strophe = (mod as any).Strophe;
+        const Strophe = mod.Strophe;
         if (!Strophe) throw new Error("strophe.js did not export Strophe");
         StropheRef.current = Strophe;
 
@@ -620,13 +622,6 @@ export function ChatModal({ open, onClose }: { open: boolean; onClose: () => voi
 
     sendCurrent(text);
     setInputValue("");
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
   };
 
   const activeRoom = target.room;

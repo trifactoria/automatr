@@ -24,6 +24,7 @@ declare module 'strophe.js' {
       MUC: string;
       [key: string]: string;
     };
+    static SASLMechanisms?: Record<string, unknown>;
 
     static getBareJidFromJid(jid: string): string;
     static getResourceFromJid(jid: string): string;
@@ -32,7 +33,7 @@ declare module 'strophe.js' {
   }
 
   export class Connection {
-    constructor(service: string, options?: any);
+    constructor(service: string, options?: unknown);
     connect(jid: string, password: string, callback: (status: number, condition?: string) => void): void;
     disconnect(reason?: string): void;
     send(element: Element | Builder): void;
@@ -43,10 +44,10 @@ declare module 'strophe.js' {
       type?: string | null,
       id?: string | null,
       from?: string | null,
-      options?: any
+      options?: unknown
     ): string;
     deleteHandler(handlerRef: string): void;
-    sendIQ(iq: Element | Builder, callback?: (iq: Element) => boolean, errback?: (iq: Element) => boolean): string;
+    sendIQ(iq: Element | Builder, callback?: (iq: Element) => boolean | void, errback?: (iq: Element) => boolean | void): string;
     flush(): void;
     jid: string;
     authenticated: boolean;
@@ -63,15 +64,15 @@ declare module 'strophe.js' {
   }
 
   export namespace $msg {
-    function apply(thisArg: any, args: any[]): Builder;
+    function apply(thisArg: unknown, args: unknown[]): Builder;
   }
 
   export namespace $pres {
-    function apply(thisArg: any, args: any[]): Builder;
+    function apply(thisArg: unknown, args: unknown[]): Builder;
   }
 
   export namespace $iq {
-    function apply(thisArg: any, args: any[]): Builder;
+    function apply(thisArg: unknown, args: unknown[]): Builder;
   }
 
   export default Strophe;

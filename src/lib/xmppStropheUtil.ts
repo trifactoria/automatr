@@ -1,8 +1,7 @@
 // src/lib/xmppStropheUtil.ts
 export function hasWebCryptoDeriveBits(): boolean {
   try {
-    const c: any = (globalThis as any)?.crypto;
-    const subtle: any = c?.subtle;
+    const subtle = globalThis.crypto?.subtle;
     return !!subtle && typeof subtle.deriveBits === "function";
   } catch {
     return false;
@@ -13,13 +12,13 @@ export function hasWebCryptoDeriveBits(): boolean {
  * If WebCrypto isn't available (insecure context / older env),
  * Strophe SCRAM can crash. Prune SCRAM SASL mechanisms BEFORE connect().
  */
-export function disableScramMechanismsIfNoWebCrypto(Strophe: any) {
+export function disableScramMechanismsIfNoWebCrypto(Strophe: { SASLMechanisms?: Record<string, unknown> }) {
   if (hasWebCryptoDeriveBits()) return;
 
   console.warn("[XMPP] crypto.subtle missing; disabling SCRAM SASL mechanisms (forcing PLAIN)");
 
   try {
-    const registry = (Strophe as any)?.SASLMechanisms;
+    const registry = Strophe.SASLMechanisms;
     if (registry && typeof registry === "object") {
       for (const k of Object.keys(registry)) {
         if (k.toUpperCase().includes("SCRAM")) delete registry[k];

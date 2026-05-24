@@ -41,7 +41,7 @@ async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
-async function apiPost<T>(path: string, body?: any): Promise<T> {
+async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -262,7 +262,7 @@ export async function getStartupLogs(
     `/containers/${encodeURIComponent(name)}/logs/startup?tail=${encodeURIComponent(tail)}&timestamps=${timestamps}`
   );
   checkApiResponse(response, "Get startup logs");
-  return { lines: (response as any).lines || [] };
+  return { lines: response.ok ? response.lines : [] };
 }
 
 export async function getAutomationLogs(
@@ -278,6 +278,5 @@ export async function getAutomationLogs(
     `/containers/${encodeURIComponent(name)}/logs/automation?${qs.toString()}`
   );
   checkApiResponse(response, "Get automation logs");
-  return { lines: (response as any).lines || [] };
+  return { lines: response.ok ? response.lines : [] };
 }
-

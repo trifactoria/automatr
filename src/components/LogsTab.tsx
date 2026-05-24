@@ -47,9 +47,9 @@ export function LogsTab({ containerName }: { containerName?: string | null }) {
         lastTextRef.current = nextText;
         setLines(nextLines);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (!silent) {
-        setError(e?.message || String(e));
+        setError(e instanceof Error ? e.message : String(e));
         setLines([]);
         lastTextRef.current = "";
       }

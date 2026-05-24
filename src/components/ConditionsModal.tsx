@@ -4,6 +4,12 @@ import * as React from "react";
 import type { StepClause, GraphVar } from "@/lib/types";
 import { Modal } from "./Modal";
 
+type ClauseHead = StepClause["head"];
+type ClauseValueKind = NonNullable<StepClause["lhs_kind"]>;
+type ClauseValueType = NonNullable<StepClause["lhs_type"]>;
+type ClauseAction = StepClause["action"];
+type StopTag = NonNullable<StepClause["stop_tag"]>;
+
 export function ConditionsModal({
   open,
   clauses,
@@ -156,7 +162,7 @@ export function ConditionsModal({
                   <select
                     className="rounded border border-gray-300 bg-white px-2 py-1 text-sm font-medium focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                     value={clause.head}
-                    onChange={(e) => handleUpdateClause(idx, { head: e.target.value as any })}
+                    onChange={(e) => handleUpdateClause(idx, { head: e.target.value as ClauseHead })}
                   >
                     <option value="if">if</option>
                     <option value="elif">elif</option>
@@ -196,7 +202,9 @@ export function ConditionsModal({
                       <select
                         className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                         value={clause.lhs_kind ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { lhs_kind: (e.target.value || null) as any })}
+                        onChange={(e) =>
+                          handleUpdateClause(idx, { lhs_kind: (e.target.value || null) as ClauseValueKind | null })
+                        }
                       >
                         <option value="">—</option>
                         <option value="buffer">buffer</option>
@@ -234,7 +242,9 @@ export function ConditionsModal({
                           <select
                             className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                             value={clause.lhs_type ?? ""}
-                            onChange={(e) => handleUpdateClause(idx, { lhs_type: (e.target.value || null) as any })}
+                            onChange={(e) =>
+                              handleUpdateClause(idx, { lhs_type: (e.target.value || null) as ClauseValueType | null })
+                            }
                           >
                             <option value="">—</option>
                             <option value="str">str</option>
@@ -279,7 +289,9 @@ export function ConditionsModal({
                       <select
                         className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                         value={clause.rhs_kind ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { rhs_kind: (e.target.value || null) as any })}
+                        onChange={(e) =>
+                          handleUpdateClause(idx, { rhs_kind: (e.target.value || null) as ClauseValueKind | null })
+                        }
                       >
                         <option value="">—</option>
                         <option value="buffer">buffer</option>
@@ -317,7 +329,9 @@ export function ConditionsModal({
                           <select
                             className="w-full rounded border border-gray-300 px-2 py-1 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                             value={clause.rhs_type ?? ""}
-                            onChange={(e) => handleUpdateClause(idx, { rhs_type: (e.target.value || null) as any })}
+                            onChange={(e) =>
+                              handleUpdateClause(idx, { rhs_type: (e.target.value || null) as ClauseValueType | null })
+                            }
                           >
                             <option value="">—</option>
                             <option value="str">str</option>
@@ -345,7 +359,7 @@ export function ConditionsModal({
                     <select
                       className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                       value={clause.action}
-                      onChange={(e) => handleUpdateClause(idx, { action: e.target.value as any })}
+                      onChange={(e) => handleUpdateClause(idx, { action: e.target.value as ClauseAction })}
                     >
                       <option value="goto">goto</option>
                       <option value="continue">continue</option>
@@ -362,7 +376,9 @@ export function ConditionsModal({
                       <select
                         className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-200"
                         value={clause.stop_tag ?? ""}
-                        onChange={(e) => handleUpdateClause(idx, { stop_tag: (e.target.value || null) as any })}
+                        onChange={(e) =>
+                          handleUpdateClause(idx, { stop_tag: (e.target.value || null) as StopTag | null })
+                        }
                       >
                         <option value="">—</option>
                         <option value="SUCCESS">SUCCESS</option>

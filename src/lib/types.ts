@@ -18,7 +18,7 @@ export type ContainerDetail = {
   busy_automation?: string | null;
   stop_latched: boolean;
   vnc_url?: string | null;
-  run_lock?: any | null;
+  run_lock?: Record<string, unknown> | null;
 };
 
 export type AutomationRow = {
@@ -120,7 +120,7 @@ export type InputStatusResponse = {
 export type InputEvent = {
   timestamp?: string;
   type: string;
-  data: Record<string, any>;
+  data: Record<string, string | number | boolean | null | undefined>;
 };
 
 export type InputEventsResponse = {
@@ -157,9 +157,9 @@ export type AutomationLogsResponse =
 
 
 // API Response Envelopes
-export type ApiOkResponse<T = any> = { ok: true } & T;
+export type ApiOkResponse<T = Record<string, unknown>> = { ok: true } & T;
 export type ApiErrorResponse = { ok: false; error: string; detail?: string };
-export type ApiResponse<T = any> = ApiOkResponse<T> | ApiErrorResponse;
+export type ApiResponse<T = Record<string, unknown>> = ApiOkResponse<T> | ApiErrorResponse;
 
 // Specific API Response Types
 export type ContainerDetailResponse = { ok: true; container: ContainerDetail };
@@ -169,4 +169,3 @@ export type SaveAutomationResponse = { ok: true; exported: boolean } | ApiErrorR
 // Summary types (used in lists)
 export type ContainerSummary = ContainerRow;
 export type AutomationSummary = AutomationRow;
-

@@ -29,7 +29,7 @@ export function StepCard({
 }) {
   const [paramsExpanded, setParamsExpanded] = useState(false);
 
-  const handleParamChange = (paramIndex: number, key: string, value: any) => {
+  const handleParamChange = (paramIndex: number, key: keyof StepParam, value: StepParam[keyof StepParam]) => {
     const newParams = [...step.params];
     newParams[paramIndex] = { ...newParams[paramIndex], [key]: value };
     onUpdate({ params: newParams });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import * as api from "@/lib/api";
 import type { InputEvent } from "@/lib/types";
 
@@ -15,9 +15,33 @@ export function XdotoolTab({ containerName, containerRunning }: Props) {
   const [error, setError] = useState<string | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  const fetchStatus = useCallback(async () => {
+    if (!containerName) return;
+    try {
+      const status = await api.getInputStatus(containerName);
+      setRecording(status.running);
+    } catch (e) {
+      console.error("Failed to fetch input status:", e);
+      setError(`Failed to fetch status: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [containerName]);
+
+  const fetchEvents = useCallback(async () => {
+    if (!containerName) return;
+    try {
+      const evts = await api.getInputEvents(containerName, { tail: 200, parse: true });
+      setEvents(evts);
+      setError(null);
+    } catch (e) {
+      console.error("Failed to fetch input events:", e);
+      setError(`Failed to fetch events: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [containerName]);
+
   // Fetch initial status and events when container changes
   useEffect(() => {
     if (!containerName) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRecording(false);
       setEvents([]);
       setError(null);
@@ -26,7 +50,7 @@ export function XdotoolTab({ containerName, containerRunning }: Props) {
 
     fetchStatus();
     fetchEvents();
-  }, [containerName]);
+  }, [containerName, fetchEvents, fetchStatus]);
 
   // Cleanup polling on unmount or container change
   useEffect(() => {
@@ -37,29 +61,6 @@ export function XdotoolTab({ containerName, containerRunning }: Props) {
       }
     };
   }, [containerName]);
-
-  async function fetchStatus() {
-    if (!containerName) return;
-    try {
-      const status = await api.getInputStatus(containerName);
-      setRecording(status.running);
-    } catch (e) {
-      console.error("Failed to fetch input status:", e);
-      setError(`Failed to fetch status: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  async function fetchEvents() {
-    if (!containerName) return;
-    try {
-      const evts = await api.getInputEvents(containerName, { tail: 200, parse: true });
-      setEvents(evts);
-      setError(null);
-    } catch (e) {
-      console.error("Failed to fetch input events:", e);
-      setError(`Failed to fetch events: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
 
   function startPolling() {
     // Clear any existing interval
@@ -122,9 +123,9 @@ export function XdotoolTab({ containerName, containerRunning }: Props) {
   }
 
   // Helper to map button number to name
-  function mapButton(button: number | string | undefined): string {
+  function mapButton(button: unknown): string {
     if (button === undefined || button === null) return "";
-    const num = typeof button === "number" ? button : parseInt(button, 10);
+    const num = typeof button === "number" ? button : parseInt(String(button), 10);
     if (num === 1) return "left";
     if (num === 2) return "middle";
     if (num === 3) return "right";

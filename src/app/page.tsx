@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type { ContainerSummary, ContainerDetail, AutomationSummary, AutomationGraph, ActionDef } from "@/lib/types";
 
@@ -50,54 +50,25 @@ export default function Page() {
   const [createAutomationOpen, setCreateAutomationOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
-  // Fetch containers and automations on mount
-  useEffect(() => {
-    refreshData();
-  }, []);
-
-  // Fetch container detail when selected container changes
-  useEffect(() => {
-    if (selectedContainer) {
-      fetchContainerDetail();
-      setViewMode("container");
-    } else {
-      setContainerDetail(null);
-      setViewMode("host");
-    }
-  }, [selectedContainer]);
-
-  // Fetch automation graph when selected automation changes
-  useEffect(() => {
-    if (selectedAutomation) {
-      fetchAutomationGraph();
-    } else {
-      setAutomationGraph(null);
-    }
-  }, [selectedAutomation]);
-
-  async function refreshData() {
-    await Promise.all([refreshContainers(), refreshAutomations(), fetchAvailableActions()]);
-  }
-
-  async function refreshContainers() {
+  const refreshContainers = useCallback(async () => {
     try {
       const cs = await api.getContainers();
       setContainers(cs);
     } catch (e) {
       console.error("Failed to fetch containers:", e);
     }
-  }
+  }, []);
 
-  async function refreshAutomations() {
+  const refreshAutomations = useCallback(async () => {
     try {
       const as = await api.getAutomations();
       setAutomations(as);
     } catch (e) {
       console.error("Failed to fetch automations:", e);
     }
-  }
+  }, []);
 
-  async function fetchAvailableActions() {
+  const fetchAvailableActions = useCallback(async () => {
     try {
       const [check, schema] = await Promise.all([
         api.getActionsCheck(),
@@ -109,9 +80,13 @@ export default function Page() {
     } catch (e) {
       console.error("Failed to fetch actions:", e);
     }
-  }
+  }, []);
 
-  async function fetchContainerDetail() {
+  const refreshData = useCallback(async () => {
+    await Promise.all([refreshContainers(), refreshAutomations(), fetchAvailableActions()]);
+  }, [fetchAvailableActions, refreshAutomations, refreshContainers]);
+
+  const fetchContainerDetail = useCallback(async () => {
     if (!selectedContainer) return;
     try {
       const detail = await api.getContainerDetail(selectedContainer);
@@ -119,9 +94,9 @@ export default function Page() {
     } catch (e) {
       console.error("Failed to fetch container detail:", e);
     }
-  }
+  }, [selectedContainer]);
 
-  async function fetchAutomationGraph() {
+  const fetchAutomationGraph = useCallback(async () => {
     if (!selectedAutomation) return;
     try {
       const graph = await api.getAutomationGraph(selectedAutomation);
@@ -130,7 +105,32 @@ export default function Page() {
       console.error("Failed to fetch automation graph:", e);
       setAutomationGraph(null);
     }
-  }
+  }, [selectedAutomation]);
+
+  // Fetch containers and automations on mount
+  useEffect(() => {
+    refreshData();
+  }, [refreshData]);
+
+  // Fetch container detail when selected container changes
+  useEffect(() => {
+    if (selectedContainer) {
+      fetchContainerDetail();
+      setViewMode("container");
+    } else {
+      setContainerDetail(null);
+      setViewMode("host");
+    }
+  }, [fetchContainerDetail, selectedContainer]);
+
+  // Fetch automation graph when selected automation changes
+  useEffect(() => {
+    if (selectedAutomation) {
+      fetchAutomationGraph();
+    } else {
+      setAutomationGraph(null);
+    }
+  }, [fetchAutomationGraph, selectedAutomation]);
 
   // Container actions
   async function handleSelectContainer(name: string) {
@@ -236,9 +236,9 @@ export default function Page() {
       });
       await refreshAutomations();
       await fetchAutomationGraph();
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error("Failed to save automation:", e);
-      setSaveError(e.message || String(e));
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
